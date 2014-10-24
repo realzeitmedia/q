@@ -14,13 +14,18 @@ func init() {
 	rand.Seed(time.Now().Unix())
 }
 
-func TestBasic(t *testing.T) {
-	os.RemoveAll("./tmp")
-	if err := os.Mkdir("./tmp/", 0700); err != nil {
-		t.Fatalf("Can't make ./tmp/: %v", err)
+func setupDataDir() string {
+	os.RemoveAll("./d")
+	if err := os.Mkdir("./d/", 0700); err != nil {
+		panic(fmt.Sprintf("Can't make ./d/: %v", err))
 	}
-	defer os.RemoveAll("./tmp")
-	q, err := NewQ("./tmp/", "events")
+	return "./d"
+}
+
+func TestBasic(t *testing.T) {
+	// Non-file based queueing.
+	d := setupDataDir()
+	q, err := NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,14 +35,16 @@ func TestBasic(t *testing.T) {
 	}
 	q.Enqueue("Event 1")
 	q.Enqueue("Event 2")
+	q.Enqueue("")
 	q.Enqueue("Event 3")
-	if got := q.Count(); 3 != got {
-		t.Errorf("Want 3, got %#v", got)
+	if got := q.Count(); 4 != got {
+		t.Errorf("Want 4, got %#v", got)
 	}
 
 	for _, want := range []string{
 		"Event 1",
 		"Event 2",
+		"",
 		"Event 3",
 	} {
 		if got := q.Dequeue(); want != got {
@@ -49,14 +56,10 @@ func TestBasic(t *testing.T) {
 	}
 }
 
-func TestEmpty(t *testing.T) {
+func TestBlock(t *testing.T) {
 	// Read should block until there is something.
-	os.RemoveAll("./tmp")
-	if err := os.Mkdir("./tmp/", 0700); err != nil {
-		t.Fatalf("Can't make ./tmp/: %v", err)
-	}
-	defer os.RemoveAll("./tmp")
-	q, err := NewQ("./tmp/", "events")
+	d := setupDataDir()
+	q, err := NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,22 +91,16 @@ func TestEmpty(t *testing.T) {
 }
 
 func TestBig(t *testing.T) {
-	// Tests might run in /tmp/<something>/
-	os.RemoveAll("./testbig")
-	if err := os.Mkdir("./testbig/", 0700); err != nil {
-		t.Fatalf("Can't make ./testbig/: %v", err)
-	}
-	defer os.RemoveAll("./testbig")
+	// Queue a lot of elements.
+	d := setupDataDir()
 	checkFiles := func(want int) {
-		fh, _ := os.Open("./testbig")
-		defer fh.Close()
-		if n, _ := fh.Readdirnames(-1); len(n) != want {
-			t.Fatalf("Wrong number of files: %v", n)
+		if got := fileCount(d); got != want {
+			t.Fatalf("Wrong number of files: got %d, want %d", got, want)
 		}
 	}
 	checkFiles(0)
 
-	q, err := NewQ("./testbig/", "events")
+	q, err := NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,14 +128,19 @@ func TestWriteError(t *testing.T) {
 	}
 }
 
+func TestNoPrefix(t *testing.T) {
+	// Need a non-nil prefix.
+	d := setupDataDir()
+	_, err := NewQ(d, "")
+	if err == nil {
+		t.Fatalf("Didn't expect to be able to write.")
+	}
+}
+
 func TestAsync(t *testing.T) {
 	// Random sleep readers and writers.
-	// Tests might run in /tmp/<something>/
-	if err := os.Mkdir("./testasync/", 0700); err != nil {
-		t.Fatalf("Can't make ./testasync/: %v", err)
-	}
-	defer os.RemoveAll("./testasync")
-	q, err := NewQ("./testasync/", "events")
+	d := setupDataDir()
+	q, err := NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,12 +176,8 @@ func TestMany(t *testing.T) {
 	eventCount := 1000000
 	clients := 10
 
-	os.RemoveAll("./testamany")
-	if err := os.Mkdir("./testamany/", 0700); err != nil {
-		t.Fatalf("Can't make ./testamany/: %v", err)
-	}
-	defer os.RemoveAll("./testamany")
-	q, err := NewQ("./testamany/", "events")
+	d := setupDataDir()
+	q, err := NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,12 +211,8 @@ func TestMany(t *testing.T) {
 
 func TestReopen1(t *testing.T) {
 	// Simple reopening.
-	os.RemoveAll("./d/")
-	if err := os.Mkdir("./d/", 0700); err != nil {
-		t.Fatalf("Can't make ./d/: %v", err)
-	}
-	defer os.RemoveAll("./d")
-	q, err := NewQ("./d/", "events")
+	d := setupDataDir()
+	q, err := NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,12 +237,8 @@ func TestReopen1(t *testing.T) {
 
 func TestReopen2(t *testing.T) {
 	// Reopening with different read and write batches.
-	os.RemoveAll("./d/")
-	if err := os.Mkdir("./d/", 0700); err != nil {
-		t.Fatalf("Can't make ./d/: %v", err)
-	}
-	// defer os.RemoveAll("./d")
-	q, err := NewQ("./d/", "events")
+	d := setupDataDir()
+	q, err := NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}

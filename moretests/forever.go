@@ -23,7 +23,10 @@ func main() {
 	}
 	defer os.RemoveAll("./store")
 
-	q := q.NewQ("./store", "q")
+	q, err := q.NewQ("./store", "q")
+	if err != nil {
+		panic(err)
+	}
 
 	for i := 0; i < 7; i++ {
 		go func() {
@@ -41,7 +44,7 @@ func main() {
 				panic(fmt.Sprintf("Payload error. Got %#v", got))
 			}
 		}
-		p := time.Duration(rand.Intn(12345)) * time.Millisecond
+		p := time.Duration(rand.Intn(22345)) * time.Millisecond
 		fmt.Printf("Sleep %s\n", p)
 		time.Sleep(p)
 	}

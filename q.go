@@ -18,8 +18,9 @@ const (
 )
 
 var (
-	errMagicNumber = errors.New("file not a Q file.")
-	errDataError   = errors.New("invalid file format")
+	errMagicNumber   = errors.New("file not a Q file.")
+	errDataError     = errors.New("invalid file format")
+	errInvalidPrefix = errors.New("invalid prefix")
 )
 
 type Q struct {
@@ -31,6 +32,9 @@ type Q struct {
 }
 
 func NewQ(dir, prefix string) (*Q, error) {
+	if len(prefix) == 0 {
+		return nil, errInvalidPrefix
+	}
 	q := Q{
 		dir:      dir,
 		prefix:   prefix,
