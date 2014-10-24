@@ -15,7 +15,15 @@ func init() {
 }
 
 func TestBasic(t *testing.T) {
-	q := NewQ("./tmp/", "events")
+	os.RemoveAll("./tmp")
+	if err := os.Mkdir("./tmp/", 0700); err != nil {
+		t.Fatalf("Can't make ./tmp/: %v", err)
+	}
+	defer os.RemoveAll("./tmp")
+	q, err := NewQ("./tmp/", "events")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer q.Close()
 	if got := q.Count(); 0 != got {
 		t.Errorf("Want 0, got %#v", got)
@@ -43,7 +51,15 @@ func TestBasic(t *testing.T) {
 
 func TestEmpty(t *testing.T) {
 	// Read should block until there is something.
-	q := NewQ("./tmp/", "events")
+	os.RemoveAll("./tmp")
+	if err := os.Mkdir("./tmp/", 0700); err != nil {
+		t.Fatalf("Can't make ./tmp/: %v", err)
+	}
+	defer os.RemoveAll("./tmp")
+	q, err := NewQ("./tmp/", "events")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer q.Close()
 
 	ready := make(chan struct{})
@@ -73,6 +89,7 @@ func TestEmpty(t *testing.T) {
 
 func TestBig(t *testing.T) {
 	// Tests might run in /tmp/<something>/
+	os.RemoveAll("./testbig")
 	if err := os.Mkdir("./testbig/", 0700); err != nil {
 		t.Fatalf("Can't make ./testbig/: %v", err)
 	}
@@ -86,7 +103,10 @@ func TestBig(t *testing.T) {
 	}
 	checkFiles(0)
 
-	q := NewQ("./testbig/", "events")
+	q, err := NewQ("./testbig/", "events")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer q.Close()
 	eventCount := 10000
 	for i := range make([]struct{}, eventCount) {
@@ -105,11 +125,9 @@ func TestBig(t *testing.T) {
 }
 
 func TestWriteError(t *testing.T) {
-	q := NewQ("/no/such/dir", "events")
-	defer q.Close()
-	eventCount := 10000
-	for i := range make([]struct{}, eventCount) {
-		q.Enqueue(fmt.Sprintf("Event %d: %s", i, strings.Repeat("0xDEAFBEEF", 300)))
+	_, err := NewQ("/no/such/dir", "events")
+	if err == nil {
+		t.Fatalf("Didn't expect to be able to write.")
 	}
 }
 
@@ -120,7 +138,10 @@ func TestAsync(t *testing.T) {
 		t.Fatalf("Can't make ./testasync/: %v", err)
 	}
 	defer os.RemoveAll("./testasync")
-	q := NewQ("./testasync/", "events")
+	q, err := NewQ("./testasync/", "events")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer q.Close()
 	eventCount := 10000
 	wg := sync.WaitGroup{}
@@ -153,12 +174,15 @@ func TestMany(t *testing.T) {
 	eventCount := 1000000
 	clients := 10
 
-	// Tests might run in /tmp/<something>/
+	os.RemoveAll("./testamany")
 	if err := os.Mkdir("./testamany/", 0700); err != nil {
 		t.Fatalf("Can't make ./testamany/: %v", err)
 	}
 	defer os.RemoveAll("./testamany")
-	q := NewQ("./testamany/", "events")
+	q, err := NewQ("./testamany/", "events")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer q.Close()
 	wg := sync.WaitGroup{}
 	payload := strings.Repeat("0xDEAFBEEF", 30)
@@ -185,4 +209,80 @@ func TestMany(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+func TestReopen1(t *testing.T) {
+	// Simple reopening.
+	os.RemoveAll("./d/")
+	if err := os.Mkdir("./d/", 0700); err != nil {
+		t.Fatalf("Can't make ./d/: %v", err)
+	}
+	defer os.RemoveAll("./d")
+	q, err := NewQ("./d/", "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Enqueue("Message 1")
+	q.Enqueue("Message 2")
+	q.Close()
+
+	q, err = NewQ("./d/", "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := q.Count(); got != 2 {
+		t.Fatalf("Want 2, got %d msgs", got)
+	}
+	q.Dequeue()
+	q.Dequeue()
+	if got := q.Count(); got != 0 {
+		t.Fatalf("Want 0, got %d msgs", got)
+	}
+	q.Close()
+}
+
+func TestReopen2(t *testing.T) {
+	// Reopening with different read and write batches.
+	os.RemoveAll("./d/")
+	if err := os.Mkdir("./d/", 0700); err != nil {
+		t.Fatalf("Can't make ./d/: %v", err)
+	}
+	// defer os.RemoveAll("./d")
+	q, err := NewQ("./d/", "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// We want at least two files.
+	var i int
+	for ; fileCount("./d") < 2; i++ {
+		q.Enqueue("...the sun shines. Raaain. When the rain comes, they run and hide their heads")
+	}
+	q.Close()
+
+	q, err = NewQ("./d/", "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := q.Count(); got != uint(i) {
+		t.Fatalf("Want %d, got %d msgs", i, got)
+	}
+	for ; i > 0; i-- {
+		q.Dequeue()
+	}
+	if got := q.Count(); got != 0 {
+		t.Fatalf("Want 0, got %d msgs", got)
+	}
+	// q.Close()
+}
+
+// fileCount is a helper to count files in a directory.
+func fileCount(dir string) int {
+	fh, _ := os.Open(dir)
+	defer fh.Close()
+	n, err := fh.Readdirnames(-1)
+	if err != nil {
+		panic(err)
+	}
+	return len(n)
 }

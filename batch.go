@@ -6,14 +6,22 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"syscall"
 	"time"
 )
 
 // batch is a chunk of elements, which might go to disk.
 type batch struct {
-	elems []string
-	size  uint // byte size, without overhead.
+	filename string // Need to be ordered alphabetically
+	elems    []string
+	size     uint // byte size, without overhead.
+}
+
+func newBatch(prefix string) *batch {
+	return &batch{
+		filename: fmt.Sprintf("%s-%020d%s", prefix, time.Now().UnixNano(), fileExtension),
+	}
 }
 
 func (b *batch) enqueue(m string) {
@@ -39,8 +47,8 @@ func (b *batch) peek() string {
 	return b.elems[0]
 }
 
-func (b *batch) saveToDisk(dir, prefix string) (string, error) {
-	filename := fmt.Sprintf("%s/%s-%020d.q", dir, prefix, time.Now().UnixNano())
+func (b *batch) saveToDisk(dir string) (string, error) {
+	filename := dir + "/" + b.filename
 	fh, err := os.OpenFile(filename, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0600)
 	if err != nil {
 		return filename, err
@@ -76,7 +84,12 @@ func openBatch(filename string) (*batch, error) {
 		return nil, err
 	}
 	defer fh.Close()
-	return deserialize(bufio.NewReader(fh))
+	b, err := deserialize(bufio.NewReader(fh))
+	if err != nil {
+		return nil, err
+	}
+	b.filename = path.Base(filename)
+	return b, nil
 }
 
 func deserialize(r io.Reader) (*batch, error) {
