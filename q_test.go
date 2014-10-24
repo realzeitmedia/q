@@ -77,18 +77,31 @@ func TestBig(t *testing.T) {
 		t.Fatalf("Can't make ./testbig/: %v", err)
 	}
 	defer os.RemoveAll("./testbig")
+	checkFiles := func(want int) {
+		fh, _ := os.Open("./testbig")
+		defer fh.Close()
+		if n, _ := fh.Readdirnames(-1); len(n) != want {
+			t.Fatalf("Wrong number of files: %v", n)
+		}
+	}
+	checkFiles(0)
+
 	q := NewQ("./testbig/", "events")
 	defer q.Close()
 	eventCount := 10000
 	for i := range make([]struct{}, eventCount) {
 		q.Enqueue(fmt.Sprintf("Event %d: %s", i, strings.Repeat("0xDEAFBEEF", 300)))
 	}
+	// There should be something stored on disk.
+	checkFiles(13)
 	for i := range make([]struct{}, eventCount) {
 		want := fmt.Sprintf("Event %d: %s", i, strings.Repeat("0xDEAFBEEF", 300))
 		if got := q.Dequeue(); want != got {
 			t.Fatalf("Want for %d: %#v, got %#v", i, want, got)
 		}
 	}
+	// Everything is processed. All files should be gone.
+	checkFiles(0)
 }
 
 func TestWriteError(t *testing.T) {

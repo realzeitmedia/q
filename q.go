@@ -128,11 +128,14 @@ func (q *Q) loop() {
 					var err error
 					filename := batches[0]
 					readBatch, err = openBatch(filename)
-					// TODO: remove from disk.
 					batches = batches[1:]
 					if err != nil {
+						// Skip this file for this run. Don't delete it.
 						log.Printf("open batch %v error: %v", filename, err)
 						goto AGAIN
+					}
+					if err = os.Remove(filename); err != nil {
+						log.Printf("can't remove batch: %v", err)
 					}
 				} else {
 					// No batches on disk. Read from the one we're writing to.
