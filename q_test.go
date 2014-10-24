@@ -31,6 +31,36 @@ func TestBasic(t *testing.T) {
 	}
 }
 
+func TestEmpty(t *testing.T) {
+	// Read should block until there is something.
+	q := NewQ("./tmp/", "events")
+	defer q.Close()
+
+	ready := make(chan struct{})
+
+	wg := sync.WaitGroup{}
+	for i := 1; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ready <- struct{}{}
+			if got := q.Dequeue(); got != "hello world" {
+				t.Errorf("Want hello, got %#v", got)
+			}
+		}()
+	}
+	for i := 1; i < 10; i++ {
+		<-ready
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	for i := 1; i < 10; i++ {
+		q.Enqueue("hello world")
+	}
+
+	wg.Wait()
+}
+
 func TestBig(t *testing.T) {
 	// Tests might run in /tmp/<something>/
 	if err := os.Mkdir("./testbig/", 0700); err != nil {
@@ -89,6 +119,46 @@ func TestAsync(t *testing.T) {
 				t.Fatalf("Want for %d: %#v, got %#v", i, want, got)
 			}
 			time.Sleep(time.Duration(rand.Intn(150)) * time.Microsecond)
+		}
+	}()
+	wg.Wait()
+}
+
+func TestMany(t *testing.T) {
+	// Read and write a lot of messages, as fast as possible.
+	// Takes less than 3 seconds on my machine.
+	eventCount := 1000000
+	clients := 10
+
+	// Tests might run in /tmp/<something>/
+	if err := os.Mkdir("./testamany/", 0700); err != nil {
+		t.Fatalf("Can't make ./testamany/: %v", err)
+	}
+	defer os.RemoveAll("./testamany")
+	q := NewQ("./testamany/", "events")
+	defer q.Close()
+	wg := sync.WaitGroup{}
+	payload := strings.Repeat("0xDEAFBEEF", 30)
+
+	for i := 0; i < clients; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < eventCount/clients; j++ {
+				q.Enqueue(payload)
+			}
+		}()
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := range make([]struct{}, eventCount) {
+			// The inserts are non-derministic, so we can't have an interesting
+			// payload.
+			if got := q.Dequeue(); payload != got {
+				t.Fatalf("Want for %d: %#v, got %#v", i, payload, got)
+			}
 		}
 	}()
 	wg.Wait()
