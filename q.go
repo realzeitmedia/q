@@ -1,0 +1,225 @@
+// TODO: save on quit.
+// TODO: check write permissions on startup.
+package q
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"syscall"
+	"time"
+)
+
+const (
+	minBlockSize = 2 * 1024 * 1024
+	magicNumber  = "QQ"
+	endToken     = "TheEnd"
+)
+
+var (
+	errMagicNumber = errors.New("file not a Q file.")
+)
+
+type Q struct {
+	dir, prefix string
+	enqueue     chan string
+	dequeue     chan string
+	quit        chan chan struct{}
+}
+
+func NewQ(dir, prefix string) *Q {
+	q := Q{
+		dir:     dir,
+		prefix:  prefix,
+		enqueue: make(chan string),
+		dequeue: make(chan string),
+		quit:    make(chan chan struct{}),
+	}
+	go q.loop()
+	return &q
+}
+
+func (q *Q) Close() {
+	c := make(chan struct{})
+	q.quit <- c
+	<-c
+}
+
+func (q *Q) Enqueue(m string) {
+	// fmt.Printf("Enq %v\n", m)
+	q.enqueue <- m
+}
+
+func (q *Q) Dequeue() string {
+	// TODO: on close
+	// fmt.Printf("Deq\n")
+	return <-q.dequeue
+}
+
+func (q *Q) loop() {
+	var batches []string // batch file names.
+	// TODO: read batches on startup.
+	writeBatch := &batch{}
+	readBatch := writeBatch
+	var out chan string
+	var nextUp string // Next element in the queue.
+	for {
+		// As long as we have no next element we keep `out` on nil. No need to
+		// check it in the select loop.
+		if out == nil {
+			if readBatch.len() > 0 {
+				nextUp = readBatch.peek()
+				out = q.dequeue
+			}
+		}
+		select {
+		case c := <-q.quit:
+			close(c)
+			close(q.enqueue)
+			close(q.dequeue)
+			return
+		case in := <-q.enqueue:
+			writeBatch.enqueue(in)
+			if writeBatch.size > minBlockSize {
+				if readBatch == writeBatch {
+					// Don't write to disk, read is already reading from this
+					// batch.
+					fmt.Printf("New writeBatch, not saving the old in, it's already being read from.\n")
+					writeBatch = &batch{}
+					continue
+				}
+				name, err := writeBatch.saveToDisk(q.dir, q.prefix)
+				if err != nil {
+					log.Printf("error writing batch to disk: %v", err)
+					writeBatch = &batch{}
+					continue
+				}
+				batches = append(batches, name)
+				fmt.Printf("Save %v, batches: %v\n", name, len(batches))
+				writeBatch = &batch{}
+			}
+		case out <- nextUp:
+			readBatch.dequeue()
+			out = nil
+			if readBatch.len() == 0 {
+			AGAIN:
+				// Finished with this batch. Open the next one, if any.
+				if len(batches) > 0 {
+					fmt.Printf("Next from batches: %v %v\n", batches[0], len(batches))
+					var err error
+					readBatch, err = openBatch(batches[0])
+					// TODO: remove from disk.
+					batches = batches[1:]
+					if err != nil {
+						log.Printf("open batch error: %v", err)
+						goto AGAIN
+					}
+				} else {
+					// No batches on disk. Read from the one we're writing to.
+					if readBatch != writeBatch {
+						fmt.Printf("Out of stored batches. Follow writeBatch\n")
+					}
+					readBatch = writeBatch
+				}
+			}
+		}
+	}
+}
+
+// batch is a cunck of elements, which might go to disk.
+type batch struct {
+	elems []string
+	size  uint // byte size, without overhead.
+}
+
+func (b *batch) enqueue(m string) {
+	b.elems = append(b.elems, m)
+	b.size += uint(len(m))
+}
+
+// dequeue takes the left most element. batch can't be empty.
+func (b *batch) dequeue() string {
+	el := b.elems[0]
+	b.size -= uint(len(el))
+	b.elems = b.elems[1:]
+	return el
+
+}
+
+func (b *batch) len() int {
+	return len(b.elems)
+}
+
+// peek at the last one. batch can't be empty.
+func (b *batch) peek() string {
+	return b.elems[0]
+}
+
+func (b *batch) saveToDisk(dir, prefix string) (string, error) {
+	filename := fmt.Sprintf("%s/%s-%020d.q", dir, prefix, time.Now().UnixNano())
+	fh, err := os.OpenFile(filename, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0600)
+	if err != nil {
+		return filename, err
+	}
+	defer fh.Close()
+	return filename, b.serialize(fh)
+}
+
+func (b *batch) serialize(w io.Writer) error {
+	_, err := w.Write([]byte(magicNumber))
+	if err != nil {
+		return err
+	}
+	if err = binary.Write(w, binary.LittleEndian, uint32(b.len())); err != nil {
+		return err
+	}
+
+	for _, e := range b.elems {
+		if err = binary.Write(w, binary.LittleEndian, uint32(len(e))); err != nil {
+			return err
+		}
+		_, err = w.Write([]byte(e))
+		if err != nil {
+			return err
+		}
+	}
+	if _, err = w.Write([]byte(endToken)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func openBatch(filename string) (*batch, error) {
+	fh, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer fh.Close()
+	return deserialize(fh)
+}
+
+func deserialize(r io.Reader) (*batch, error) {
+	b := &batch{}
+	magic := make([]byte, len(magicNumber))
+	_, err := r.Read(magic)
+	if err != nil {
+		return nil, err
+	}
+	if string(magic) != magicNumber {
+		return nil, errMagicNumber
+	}
+	var count uint32
+	binary.Read(r, binary.LittleEndian, &count)
+	for i := uint32(0); i < count; i++ {
+		var size uint32
+		binary.Read(r, binary.LittleEndian, &size) // TODO: err & length
+		msg := make([]byte, size)
+		binary.Read(r, binary.LittleEndian, &msg) // TODO: err & length
+		b.enqueue(string(msg))
+	}
+	// TODO: check endToken
+	return b, nil
+}
