@@ -29,16 +29,18 @@ type Q struct {
 	dir, prefix string
 	enqueue     chan string
 	dequeue     chan string
+	countReq    chan chan uint
 	quit        chan chan struct{}
 }
 
 func NewQ(dir, prefix string) *Q {
 	q := Q{
-		dir:     dir,
-		prefix:  prefix,
-		enqueue: make(chan string),
-		dequeue: make(chan string),
-		quit:    make(chan chan struct{}),
+		dir:      dir,
+		prefix:   prefix,
+		enqueue:  make(chan string),
+		dequeue:  make(chan string),
+		countReq: make(chan chan uint),
+		quit:     make(chan chan struct{}),
 	}
 	go q.loop()
 	return &q
@@ -62,11 +64,18 @@ func (q *Q) Dequeue() string {
 	return <-q.dequeue
 }
 
+func (q *Q) Count() uint {
+	r := make(chan uint)
+	q.countReq <- r
+	return <-r
+}
+
 func (q *Q) loop() {
 	var batches []string // batch file names.
 	// TODO: read batches on startup.
 	writeBatch := &batch{}
 	readBatch := writeBatch
+	count := uint(0)
 	var out chan string
 	var nextUp string // Next element in the queue.
 	for {
@@ -84,7 +93,10 @@ func (q *Q) loop() {
 			close(q.enqueue)
 			close(q.dequeue)
 			return
+		case r := <-q.countReq:
+			r <- count
 		case in := <-q.enqueue:
+			count++
 			writeBatch.enqueue(in)
 			if writeBatch.size > minBlockSize {
 				if readBatch == writeBatch {
@@ -106,6 +118,7 @@ func (q *Q) loop() {
 			}
 		case out <- nextUp:
 			readBatch.dequeue()
+			count--
 			out = nil
 			if readBatch.len() == 0 {
 			AGAIN:

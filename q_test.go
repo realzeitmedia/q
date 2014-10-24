@@ -17,9 +17,16 @@ func init() {
 func TestBasic(t *testing.T) {
 	q := NewQ("./tmp/", "events")
 	defer q.Close()
+	if got := q.Count(); 0 != got {
+		t.Errorf("Want 0, got %#v", got)
+	}
 	q.Enqueue("Event 1")
 	q.Enqueue("Event 2")
 	q.Enqueue("Event 3")
+	if got := q.Count(); 3 != got {
+		t.Errorf("Want 3, got %#v", got)
+	}
+
 	for _, want := range []string{
 		"Event 1",
 		"Event 2",
@@ -28,6 +35,9 @@ func TestBasic(t *testing.T) {
 		if got := q.Dequeue(); want != got {
 			t.Errorf("Want %#v, got %#v", want, got)
 		}
+	}
+	if got := q.Count(); 0 != got {
+		t.Errorf("Want 0, got %#v", got)
 	}
 }
 
