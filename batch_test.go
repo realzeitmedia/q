@@ -43,19 +43,19 @@ func TestBatchDeserialize(t *testing.T) {
 
 	// Bogus trailing data
 	_, err = deserialize(bytes.NewBufferString(msg + "trailing"))
-	if err == nil {
-		t.Fatalf("expected deserialize error", err)
+	if err != errDataError {
+		t.Fatalf("expected deserialize error: %v", err)
 	}
 
 	// Wrong magic.
 	_, err = deserialize(bytes.NewBufferString(msg[10:]))
-	if err == nil {
-		t.Fatalf("expected deserialize error", err)
+	if err != errMagicNumber {
+		t.Fatalf("expected deserialize error: %v", err)
 	}
 
 	// Chopped msg.
 	_, err = deserialize(bytes.NewBufferString(msg[:30]))
-	if err == nil {
-		t.Fatalf("expected deserialize error", err)
+	if err == nil || err.Error() != "unexpected EOF" {
+		t.Fatalf("expected deserialize error: %#v", err)
 	}
 }
