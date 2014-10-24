@@ -1,11 +1,9 @@
 package q
 
 import (
-	"bytes"
 	"fmt"
 	"math/rand"
 	"os"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -59,34 +57,6 @@ func TestWriteError(t *testing.T) {
 	eventCount := 10000
 	for i := range make([]struct{}, eventCount) {
 		q.Enqueue(fmt.Sprintf("Event %d: %s", i, strings.Repeat("0xDEAFBEEF", 300)))
-	}
-}
-
-func TestBatchSerialize(t *testing.T) {
-	b := &batch{}
-	b.enqueue("first")
-	b.enqueue("second")
-	b.enqueue("third")
-
-	// batch to bytes...
-	var buf bytes.Buffer
-	err := b.serialize(&buf)
-	if err != nil {
-		t.Fatalf("unexpected serialize error: %v", err)
-	}
-	want := "QQ\x03\x00\x00\x00\x05\x00\x00\x00first\x06\x00\x00\x00second\x05\x00\x00\x00thirdTheEnd"
-	got := buf.String()
-	if got != want {
-		t.Errorf("serialize error. Got \n%#v, want \n%#v", got, want)
-	}
-
-	// ...and back again to batch.
-	again, err := deserialize(bytes.NewBufferString(got))
-	if err != nil {
-		t.Fatalf("unexpected deserialize error: %v", err)
-	}
-	if !reflect.DeepEqual(again, b) {
-		t.Fatalf("deserialize not the same. Want %#v, got %#v", b, again)
 	}
 }
 

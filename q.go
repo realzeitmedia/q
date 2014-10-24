@@ -3,6 +3,7 @@
 package q
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -15,12 +16,13 @@ import (
 
 const (
 	minBlockSize = 2 * 1024 * 1024
+	maxMsgSize   = 10 * 1024 * 1024
 	magicNumber  = "QQ"
-	endToken     = "TheEnd"
 )
 
 var (
 	errMagicNumber = errors.New("file not a Q file.")
+	errDataError   = errors.New("invalid file format")
 )
 
 type Q struct {
@@ -49,6 +51,7 @@ func (q *Q) Close() {
 }
 
 func (q *Q) Enqueue(m string) {
+	// TODO: if len(m) > maxMsgSize
 	// fmt.Printf("Enq %v\n", m)
 	q.enqueue <- m
 }
@@ -87,7 +90,7 @@ func (q *Q) loop() {
 				if readBatch == writeBatch {
 					// Don't write to disk, read is already reading from this
 					// batch.
-					fmt.Printf("New writeBatch, not saving the old in, it's already being read from.\n")
+					fmt.Printf("New writeBatch, not saving the old batch, it's already being read from.\n")
 					writeBatch = &batch{}
 					continue
 				}
@@ -110,11 +113,12 @@ func (q *Q) loop() {
 				if len(batches) > 0 {
 					fmt.Printf("Next from batches: %v %v\n", batches[0], len(batches))
 					var err error
-					readBatch, err = openBatch(batches[0])
+					filename := batches[0]
+					readBatch, err = openBatch(filename)
 					// TODO: remove from disk.
 					batches = batches[1:]
 					if err != nil {
-						log.Printf("open batch error: %v", err)
+						log.Printf("open batch %v error: %v", filename, err)
 						goto AGAIN
 					}
 				} else {
@@ -186,9 +190,6 @@ func (b *batch) serialize(w io.Writer) error {
 			return err
 		}
 	}
-	if _, err = w.Write([]byte(endToken)); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -198,28 +199,42 @@ func openBatch(filename string) (*batch, error) {
 		return nil, err
 	}
 	defer fh.Close()
-	return deserialize(fh)
+	return deserialize(bufio.NewReader(fh))
 }
 
 func deserialize(r io.Reader) (*batch, error) {
 	b := &batch{}
 	magic := make([]byte, len(magicNumber))
-	_, err := r.Read(magic)
-	if err != nil {
+	if _, err := r.Read(magic); err != nil {
 		return nil, err
 	}
 	if string(magic) != magicNumber {
 		return nil, errMagicNumber
 	}
-	var count uint32
-	binary.Read(r, binary.LittleEndian, &count)
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+	count := binary.LittleEndian.Uint32(buf)
+	// fmt.Printf("Count: %d\n", count)
 	for i := uint32(0); i < count; i++ {
-		var size uint32
-		binary.Read(r, binary.LittleEndian, &size) // TODO: err & length
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil, err
+		}
+		size := binary.LittleEndian.Uint32(buf)
+		if size > maxMsgSize {
+			panic(fmt.Sprintf("Size too big: %d", size))
+		}
 		msg := make([]byte, size)
-		binary.Read(r, binary.LittleEndian, &msg) // TODO: err & length
+		if _, err := io.ReadFull(r, msg); err != nil {
+			return nil, err
+		}
 		b.enqueue(string(msg))
 	}
-	// TODO: check endToken
+	// We expect to be at EOF now.
+	n, err := io.ReadFull(r, buf)
+	if n != 0 || err != io.EOF {
+		return nil, errDataError
+	}
 	return b, nil
 }
