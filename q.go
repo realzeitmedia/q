@@ -3,7 +3,6 @@ package q
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"sort"
@@ -55,7 +54,7 @@ func NewQ(dir, prefix string) (*Q, error) {
 	}
 	for _, name := range names {
 		// fmt.Printf("Consider %s\n", name)
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, fileExtension) {
+		if !strings.HasPrefix(name, prefix+"-") || !strings.HasSuffix(name, fileExtension) {
 			continue
 		}
 		existing = append(existing, name)
@@ -156,18 +155,18 @@ func (q *Q) loop(existing []string) {
 				if readBatch == writeBatch {
 					// Don't write to disk, read is already reading from this
 					// batch.
-					fmt.Printf("New writeBatch, not saving the old batch, it's already being read from.\n")
+					// fmt.Printf("New writeBatch, not saving the old batch, it's already being read from.\n")
 					writeBatch = newBatch(q.prefix)
 					continue
 				}
-				name, err := writeBatch.saveToDisk(q.dir)
+				_, err := writeBatch.saveToDisk(q.dir)
 				if err != nil {
 					log.Printf("error writing batch to disk: %v", err)
 					writeBatch = newBatch(q.prefix)
 					continue
 				}
 				batches = append(batches, writeBatch.filename)
-				fmt.Printf("Save %v, batches: %v\n", name, len(batches))
+				// fmt.Printf("Save %v, batches: %v\n", name, len(batches))
 				writeBatch = newBatch(q.prefix)
 			}
 		case out <- nextUp:
@@ -179,7 +178,7 @@ func (q *Q) loop(existing []string) {
 			AGAIN:
 				// Finished with this batch. Open the next one, if any.
 				if len(batches) > 0 {
-					fmt.Printf("Next from batches: %v %v\n", batches[0], len(batches))
+					// fmt.Printf("Next from batches: %v %v\n", batches[0], len(batches))
 					var err error
 					filename := batches[0]
 					readBatch, err = openBatch(q.dir + "/" + filename)
@@ -194,9 +193,9 @@ func (q *Q) loop(existing []string) {
 					}
 				} else {
 					// No batches on disk. Read from the one we're writing to.
-					if readBatch != writeBatch {
-						fmt.Printf("Out of stored batches. Follow writeBatch\n")
-					}
+					// if readBatch != writeBatch {
+					// fmt.Printf("Out of stored batches. Follow writeBatch\n")
+					// }
 					readBatch = writeBatch
 				}
 			}

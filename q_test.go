@@ -92,6 +92,10 @@ func TestBlock(t *testing.T) {
 
 func TestBig(t *testing.T) {
 	// Queue a lot of elements.
+	if testing.Short() {
+		t.Skip("skipping test in short mode.")
+	}
+
 	d := setupDataDir()
 	checkFiles := func(want int) {
 		if got := fileCount(d); got != want {
@@ -138,6 +142,10 @@ func TestNoPrefix(t *testing.T) {
 }
 
 func TestAsync(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode.")
+	}
+
 	// Random sleep readers and writers.
 	d := setupDataDir()
 	q, err := NewQ(d, "events")
@@ -171,6 +179,10 @@ func TestAsync(t *testing.T) {
 }
 
 func TestMany(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode.")
+	}
+
 	// Read and write a lot of messages, as fast as possible.
 	// Takes less than 3 seconds on my machine.
 	eventCount := 1000000
