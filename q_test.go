@@ -47,7 +47,7 @@ func TestBasic(t *testing.T) {
 		"",
 		"Event 3",
 	} {
-		if got := q.Dequeue(); want != got {
+		if got := <-q.Queue(); want != got {
 			t.Errorf("Want %#v, got %#v", want, got)
 		}
 	}
@@ -73,7 +73,7 @@ func TestBlock(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			ready <- struct{}{}
-			if got := q.Dequeue(); got != "hello world" {
+			if got := <-q.Queue(); got != "hello world" {
 				t.Errorf("Want hello, got %#v", got)
 			}
 		}()
@@ -117,7 +117,7 @@ func TestBig(t *testing.T) {
 	checkFiles(13)
 	for i := range make([]struct{}, eventCount) {
 		want := fmt.Sprintf("Event %d: %s", i, strings.Repeat("0xDEAFBEEF", 300))
-		if got := q.Dequeue(); want != got {
+		if got := <-q.Queue(); want != got {
 			t.Fatalf("Want for %d: %#v, got %#v", i, want, got)
 		}
 	}
@@ -169,7 +169,7 @@ func TestAsync(t *testing.T) {
 		defer wg.Done()
 		for i := range make([]struct{}, eventCount) {
 			want := fmt.Sprintf("Event %d: %s", i, strings.Repeat("0xDEAFBEEF", 300))
-			if got := q.Dequeue(); want != got {
+			if got := <-q.Queue(); want != got {
 				t.Fatalf("Want for %d: %#v, got %#v", i, want, got)
 			}
 			time.Sleep(time.Duration(rand.Intn(150)) * time.Microsecond)
@@ -213,7 +213,7 @@ func TestMany(t *testing.T) {
 		for i := range make([]struct{}, eventCount) {
 			// The inserts are non-derministic, so we can't have an interesting
 			// payload.
-			if got := q.Dequeue(); payload != got {
+			if got := <-q.Queue(); payload != got {
 				t.Fatalf("Want for %d: %#v, got %#v", i, payload, got)
 			}
 		}
@@ -239,8 +239,8 @@ func TestReopen1(t *testing.T) {
 	if got := q.Count(); got != 2 {
 		t.Fatalf("Want 2, got %d msgs", got)
 	}
-	q.Dequeue()
-	q.Dequeue()
+	<-q.Queue()
+	<-q.Queue()
 	if got := q.Count(); got != 0 {
 		t.Fatalf("Want 0, got %d msgs", got)
 	}
@@ -270,7 +270,7 @@ func TestReopen2(t *testing.T) {
 		t.Fatalf("Want %d, got %d msgs", i, got)
 	}
 	for ; i > 0; i-- {
-		q.Dequeue()
+		<-q.Queue()
 	}
 	if got := q.Count(); got != 0 {
 		t.Fatalf("Want 0, got %d msgs", got)

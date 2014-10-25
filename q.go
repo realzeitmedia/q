@@ -1,5 +1,6 @@
-// TODO: check write permissions on startup.
 package q
+
+// TODO: check write permissions on startup.
 
 import (
 	"errors"
@@ -17,7 +18,7 @@ const (
 )
 
 var (
-	errMagicNumber   = errors.New("file not a Q file.")
+	errMagicNumber   = errors.New("file not a Q file")
 	errDataError     = errors.New("invalid file format")
 	errInvalidPrefix = errors.New("invalid prefix")
 )
@@ -30,6 +31,7 @@ type Q struct {
 	quit        chan chan struct{}
 }
 
+// NewQ makes or opens a Q, with files in and from <dir>/<prefix>-1234.q
 func NewQ(dir, prefix string) (*Q, error) {
 	if len(prefix) == 0 {
 		return nil, errInvalidPrefix
@@ -66,24 +68,27 @@ func NewQ(dir, prefix string) (*Q, error) {
 	return &q, nil
 }
 
+// Close will write all pending queue entries to disk before closing.
 func (q *Q) Close() {
 	c := make(chan struct{})
 	q.quit <- c
 	<-c
 }
 
+// Enqueue adds a messages to the queue
 func (q *Q) Enqueue(m string) {
 	// TODO: if len(m) > maxMsgSize
 	// fmt.Printf("Enq %v\n", m)
 	q.enqueue <- m
 }
 
-func (q *Q) Dequeue() string {
-	// TODO: on close
-	// fmt.Printf("Deq\n")
-	return <-q.dequeue
+// Queue gives the channel to read queue entries from.
+func (q *Q) Queue() <-chan string {
+	return q.dequeue
 }
 
+// Count gives the total number of entries in the queue. Can be too high if
+// queue files are deleted by something else.
 func (q *Q) Count() uint {
 	r := make(chan uint)
 	q.countReq <- r

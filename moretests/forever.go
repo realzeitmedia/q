@@ -40,7 +40,7 @@ func main() {
 	for {
 		// Empty the queue as quick as possible, then sleep a little.
 		for q.Count() != 0 {
-			if got := q.Dequeue(); got != payload {
+			if got := <-q.Queue(); got != payload {
 				panic(fmt.Sprintf("Payload error. Got %#v", got))
 			}
 		}

@@ -6,8 +6,7 @@ import (
 )
 
 func BenchmarkSeq(b *testing.B) {
-	// First write, then read a bunch of messages.
-	// Takes less than 3 seconds on my machine.
+	// First writed a bunch of messages, then read them.
 	var (
 		eventCount = 100000
 		payload    = strings.Repeat("0xDEAFBEEF", 30)
@@ -25,7 +24,7 @@ func BenchmarkSeq(b *testing.B) {
 			q.Enqueue(payload)
 		}
 		for j := 0; j < eventCount; j++ {
-			if got := q.Dequeue(); payload != got {
+			if got := <-q.Queue(); payload != got {
 				b.Fatalf("Want for %d: %#v, got %#v", i, payload, got)
 			}
 		}
@@ -57,7 +56,7 @@ func BenchmarkMulti(b *testing.B) {
 		}
 
 		for i := range make([]struct{}, eventCount) {
-			if got := q.Dequeue(); payload != got {
+			if got := <-q.Queue(); payload != got {
 				b.Fatalf("Want for %d: %#v, got %#v", i, payload, got)
 			}
 		}
