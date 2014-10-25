@@ -112,7 +112,7 @@ func (q *Q) loop(existing []string) {
 			readBatch = b
 		}
 		batches = append(batches, b.filename)
-		count += uint(len(b.elems))
+		count += uint(b.elems.Len())
 	}
 
 	writeBatch := newBatch(q.prefix)

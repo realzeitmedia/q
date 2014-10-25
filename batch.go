@@ -2,6 +2,7 @@ package q
 
 import (
 	"bufio"
+	"container/list"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -14,37 +15,38 @@ import (
 // batch is a chunk of elements, which might go to disk.
 type batch struct {
 	filename string // Need to be ordered alphabetically
-	elems    []string
+	elems    *list.List
 	size     uint // byte size, without overhead.
 }
 
 func newBatch(prefix string) *batch {
 	return &batch{
 		filename: fmt.Sprintf("%s-%020d%s", prefix, time.Now().UnixNano(), fileExtension),
+		elems:    list.New(),
 	}
 }
 
 func (b *batch) enqueue(m string) {
-	b.elems = append(b.elems, m)
+	b.elems.PushBack(m)
 	b.size += uint(len(m))
 }
 
 // dequeue takes the left most element. batch can't be empty.
 func (b *batch) dequeue() string {
-	el := b.elems[0]
-	b.size -= uint(len(el))
-	b.elems = b.elems[1:]
-	return el
+	el := b.elems.Front()
+	b.size -= uint(len(el.Value.(string)))
+	b.elems.Remove(el)
+	return el.Value.(string)
 
 }
 
 func (b *batch) len() int {
-	return len(b.elems)
+	return b.elems.Len()
 }
 
 // peek at the last one. batch can't be empty.
 func (b *batch) peek() string {
-	return b.elems[0]
+	return b.elems.Front().Value.(string)
 }
 
 func (b *batch) saveToDisk(dir string) (string, error) {
@@ -66,11 +68,11 @@ func (b *batch) serialize(w io.Writer) error {
 		return err
 	}
 
-	for _, e := range b.elems {
-		if err = binary.Write(w, binary.LittleEndian, uint32(len(e))); err != nil {
+	for e := b.elems.Front(); e != nil; e = e.Next() {
+		if err = binary.Write(w, binary.LittleEndian, uint32(len(e.Value.(string)))); err != nil {
 			return err
 		}
-		_, err = w.Write([]byte(e))
+		_, err = w.Write([]byte(e.Value.(string)))
 		if err != nil {
 			return err
 		}
@@ -93,7 +95,7 @@ func openBatch(filename string) (*batch, error) {
 }
 
 func deserialize(r io.Reader) (*batch, error) {
-	b := &batch{}
+	b := newBatch("")
 	magic := make([]byte, len(magicNumber))
 	if _, err := r.Read(magic); err != nil {
 		return nil, err
