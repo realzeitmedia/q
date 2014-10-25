@@ -54,7 +54,9 @@ func (b *batch) saveToDisk(dir string) (string, error) {
 		return filename, err
 	}
 	defer fh.Close()
-	return filename, b.serialize(fh)
+	w := bufio.NewWriter(fh)
+	defer w.Flush()
+	return filename, b.serialize(w)
 }
 
 func (b *batch) serialize(w io.Writer) error {
