@@ -1,6 +1,7 @@
 package q
 
 // TODO: check write permissions on startup.
+// TODO: something better with errors. Maybe an error channel?
 
 import (
 	"errors"
@@ -11,8 +12,9 @@ import (
 )
 
 const (
-	minBlockSize  = 2 * 1024 * 1024
-	maxMsgSize    = 10 * 1024 * 1024
+	// BlockSize is the amount of memory the queue can have before entries are written
+	// to disk. The system can use maximum twice this number.
+	BlockSize     = 2 * 1024 * 1024
 	magicNumber   = "QQ"
 	fileExtension = ".q"
 )
@@ -23,6 +25,7 @@ var (
 	errInvalidPrefix = errors.New("invalid prefix")
 )
 
+// Q is a queue which will use disk storage if it's too long.
 type Q struct {
 	dir, prefix string
 	enqueue     chan string
@@ -32,6 +35,7 @@ type Q struct {
 }
 
 // NewQ makes or opens a Q, with files in and from <dir>/<prefix>-1234.q
+// prefix needs to be a simple, alphanumeric string.
 func NewQ(dir, prefix string) (*Q, error) {
 	if len(prefix) == 0 {
 		return nil, errInvalidPrefix
@@ -77,8 +81,6 @@ func (q *Q) Close() {
 
 // Enqueue adds a messages to the queue
 func (q *Q) Enqueue(m string) {
-	// TODO: if len(m) > maxMsgSize
-	// fmt.Printf("Enq %v\n", m)
 	q.enqueue <- m
 }
 
@@ -156,11 +158,10 @@ func (q *Q) loop(existing []string) {
 		case in := <-q.enqueue:
 			count++
 			writeBatch.enqueue(in)
-			if writeBatch.size > minBlockSize {
+			if writeBatch.size > BlockSize {
 				if readBatch == writeBatch {
 					// Don't write to disk, read is already reading from this
 					// batch.
-					// fmt.Printf("New writeBatch, not saving the old batch, it's already being read from.\n")
 					writeBatch = newBatch(q.prefix)
 					continue
 				}
