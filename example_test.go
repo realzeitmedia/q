@@ -6,17 +6,17 @@ import (
 	"github.com/alicebob/q"
 )
 
-func ExampleSimple() {
-	// Dir should be e.q. "/var/lib/myapp/queue".
-	// It is /tmp/ to make this example compile.
-	queue, err := q.NewQ("/tmp", "views")
+func Example() {
+	queue, err := q.NewQ("/var/lib/myapp/queue/", "views")
 	if err != nil {
 		panic(err) // ...
 	}
 	defer queue.Close()
+
+	// Set-up a single (or more) queue readers.
 	go func() {
 		for msg := range queue.Queue() {
-			// Do something with msg.
+			// Do something with msg which can potentially block.
 			fmt.Println(msg.(string))
 		}
 	}()
@@ -24,7 +24,4 @@ func ExampleSimple() {
 	// Elsewhere:
 	queue.Enqueue("Hello World!")
 	queue.Enqueue("How's things?")
-	//OUTPUT:
-	// Hello World!
-	// How's things?
 }

@@ -1,4 +1,4 @@
-// A queue which keep keep filling and clearing, forever.
+// A queue which keeps filling and clearing, forever.
 package main
 
 import (
