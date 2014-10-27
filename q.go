@@ -77,7 +77,7 @@ func (q *Q) Close() {
 	<-c
 }
 
-// Enqueue adds a messages to the queue
+// Enqueue adds a message to the queue.
 func (q *Q) Enqueue(m interface{}) {
 	q.enqueue <- m
 }
