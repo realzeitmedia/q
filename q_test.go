@@ -228,6 +228,46 @@ func TestMany(t *testing.T) {
 	wg.Wait()
 }
 
+func TestMany2(t *testing.T) {
+	// Test with a few readers. They will be starved.
+	if testing.Short() {
+		t.Skip("skipping test in short mode.")
+	}
+
+	eventCount := 1000000
+	clients := 10
+
+	d := setupDataDir()
+	q, err := NewQ(d, "events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+	wg := sync.WaitGroup{}
+	payload := strings.Repeat("0xDEAFBEEF", 30)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for j := 0; j < eventCount; j++ {
+			q.Enqueue(payload)
+		}
+	}()
+
+	for i := 0; i < clients; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < eventCount/clients; i++ {
+				if got := <-q.Queue(); payload != got {
+					t.Fatalf("Want %#v, got %#v", payload, got)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
 func TestReopen1(t *testing.T) {
 	// Simple reopening.
 	d := setupDataDir()
