@@ -18,10 +18,10 @@ swapped to disk.
 Use case
 --------
 
-We use it in HTTP servers which get 1K requests/second, and store log events
+We use it in HTTP servers which store log events
 into ElasticSearch (ES). The ES installation is remote, so sometimes it lags a
 little, and sometimes ES is just plain unresponsive. This queue shields the HTTP
-server from ES and network hick-ups, while not throwing away events.
+server from ES and from network hick-ups, while not throwing away events or blowing up the webservers.
 
 
 File format
@@ -30,25 +30,25 @@ File format
 Disk files are simple chunks of `gob` encoded lists with parts of the queue in
 them. Files have a maximum number of entries so multiple files will be used
 when the readers lags behind a lot. The administrator is free to delete and
-backup files if things really go haywire.
+backup (some of the) files if things really go haywire.
 
 
 Internals
 ---------
 
-The queue is chopped in chunks called 'batch'es. If the reader is keeping up
+The queue is chopped in chunks called `batch`es. If the reader is keeping up
 both the reader (`Dequeue()`) and the writer (the `Queue` channel) are using
 the same `batch` object, and nothing is stored on disk.
 
 When the reader lags behind more than `BlockCount` entries the writer will get
-it's own `batch` object. When that one is full it will be written to disk and
-writer gets a new `batch` object.
+its own `batch` object. When that one is full it will be written to disk and
+a new `batch` object will be filled, et cetera.
 
 ```
 [   ##][#####][#####][### ]
     ^   ^      ^        ^
     |   |      |        |
-    |   |      |        \-- the writer is fulling this (in memory) batch.
+    |   |      |        \-- the writer is filling this (in memory) batch.
     |   |      |         
     |   |      \-- this batch is not used and is stored on disk.
     |   |
@@ -57,12 +57,12 @@ writer gets a new `batch` object.
     \-- the reader is reading from this (in memory) batch.
 ```
 
-When the reader catches up it will process the stored batches one by one, and
-eventually switch over the the same batch as the writer is using.
+When the reader catches up it will open and process the stored batches one by one, and
+eventually switch over to the same batch as the writer is using.
 
 
 TODO
 ----
 
 - Optionally limit maximum disk usage.
-- Handle errors better than just logging them. Maybe an error channel?
+- Handle errors in a better way than just logging them. Maybe an error channel?
