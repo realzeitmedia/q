@@ -114,7 +114,7 @@ func TestBig(t *testing.T) {
 		q.Enqueue(fmt.Sprintf("Event %d: %s", i, strings.Repeat("0xDEAFBEEF", 300)))
 	}
 	// There should be something stored on disk.
-	checkFiles(13)
+	checkFiles(8)
 	for i := range make([]struct{}, eventCount) {
 		want := fmt.Sprintf("Event %d: %s", i, strings.Repeat("0xDEAFBEEF", 300))
 		if got := <-q.Queue(); want != got {
@@ -276,6 +276,35 @@ func TestReopen2(t *testing.T) {
 		t.Fatalf("Want 0, got %d msgs", got)
 	}
 	// q.Close()
+}
+
+func TestNotAString(t *testing.T) {
+	// Queue not-a-string.
+	d := setupDataDir()
+	q, err := NewQ(d, "i")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Enqueue(1)
+	q.Enqueue(42)
+	q.Close()
+
+	q, err = NewQ("./d/", "i")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := q.Count(); got != 2 {
+		t.Fatalf("Want 2, got %d msgs", got)
+	}
+	for _, want := range []int{1, 42} {
+		if got := <-q.Queue(); got != want {
+			t.Fatalf("Want %v, got %v msgs", want, got)
+		}
+	}
+	if got := q.Count(); got != 0 {
+		t.Fatalf("Want 0, got %d msgs", got)
+	}
+	q.Close()
 }
 
 // fileCount is a helper to count files in a directory.

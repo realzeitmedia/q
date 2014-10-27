@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	// BlockSize is the amount of memory the queue can have before entries are written
+	// BlockCount is the number of entries the queue can have before entries are written
 	// to disk. The system can use maximum twice this number.
-	BlockSize     = 2 * 1024 * 1024
+	BlockCount    = 1024
 	magicNumber   = "QQ"
 	fileExtension = ".q"
 )
@@ -28,8 +28,8 @@ var (
 // Q is a queue which will use disk storage if it's too long.
 type Q struct {
 	dir, prefix string
-	enqueue     chan string
-	dequeue     chan string
+	enqueue     chan interface{}
+	dequeue     chan interface{}
 	countReq    chan chan uint
 	quit        chan chan struct{}
 }
@@ -43,8 +43,8 @@ func NewQ(dir, prefix string) (*Q, error) {
 	q := Q{
 		dir:      dir,
 		prefix:   prefix,
-		enqueue:  make(chan string),
-		dequeue:  make(chan string),
+		enqueue:  make(chan interface{}),
+		dequeue:  make(chan interface{}),
 		countReq: make(chan chan uint),
 		quit:     make(chan chan struct{}),
 	}
@@ -59,14 +59,12 @@ func NewQ(dir, prefix string) (*Q, error) {
 		return nil, err
 	}
 	for _, name := range names {
-		// fmt.Printf("Consider %s\n", name)
 		if !strings.HasPrefix(name, prefix+"-") || !strings.HasSuffix(name, fileExtension) {
 			continue
 		}
 		existing = append(existing, name)
 	}
 	sort.Strings(existing)
-	// fmt.Printf("Existing: %v", existing)
 	f.Close()
 	go q.loop(existing)
 	return &q, nil
@@ -80,12 +78,12 @@ func (q *Q) Close() {
 }
 
 // Enqueue adds a messages to the queue
-func (q *Q) Enqueue(m string) {
+func (q *Q) Enqueue(m interface{}) {
 	q.enqueue <- m
 }
 
 // Queue gives the channel to read queue entries from.
-func (q *Q) Queue() <-chan string {
+func (q *Q) Queue() <-chan interface{} {
 	return q.dequeue
 }
 
@@ -119,15 +117,15 @@ func (q *Q) loop(existing []string) {
 			readBatch = b
 		}
 		batches = append(batches, b.filename)
-		count += uint(len(b.elems))
+		count += uint(b.len())
 	}
 
 	writeBatch := newBatch(q.prefix)
 	if readBatch == nil {
 		readBatch = writeBatch
 	}
-	var out chan string
-	var nextUp string // Next element in the queue.
+	var out chan interface{}
+	var nextUp interface{} // Next element in the queue.
 	for {
 		// As long as we have no next element we keep `out` on nil. No need to
 		// check it in the select loop.
@@ -158,21 +156,19 @@ func (q *Q) loop(existing []string) {
 		case in := <-q.enqueue:
 			count++
 			writeBatch.enqueue(in)
-			if writeBatch.size > BlockSize {
+			if writeBatch.len() > BlockCount {
 				if readBatch == writeBatch {
 					// Don't write to disk, read is already reading from this
 					// batch.
 					writeBatch = newBatch(q.prefix)
 					continue
 				}
-				_, err := writeBatch.saveToDisk(q.dir)
-				if err != nil {
+				if _, err := writeBatch.saveToDisk(q.dir); err != nil {
 					log.Printf("error writing batch to disk: %v", err)
 					writeBatch = newBatch(q.prefix)
 					continue
 				}
 				batches = append(batches, writeBatch.filename)
-				// fmt.Printf("Save %v, batches: %v\n", name, len(batches))
 				writeBatch = newBatch(q.prefix)
 			}
 		case out <- nextUp:
@@ -184,7 +180,6 @@ func (q *Q) loop(existing []string) {
 			AGAIN:
 				// Finished with this batch. Open the next one, if any.
 				if len(batches) > 0 {
-					// fmt.Printf("Next from batches: %v %v\n", batches[0], len(batches))
 					var err error
 					filename := batches[0]
 					readBatch, err = openBatch(q.dir + "/" + filename)
@@ -199,9 +194,6 @@ func (q *Q) loop(existing []string) {
 					}
 				} else {
 					// No batches on disk. Read from the one we're writing to.
-					// if readBatch != writeBatch {
-					// fmt.Printf("Out of stored batches. Follow writeBatch\n")
-					// }
 					readBatch = writeBatch
 				}
 			}

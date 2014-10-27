@@ -14,8 +14,7 @@ import (
 // batch is a chunk of elements, which might go to disk.
 type batch struct {
 	filename string // Need to be ordered alphabetically
-	elems    []string
-	size     uint // byte size, without overhead.
+	elems    []interface{}
 }
 
 func newBatch(prefix string) *batch {
@@ -24,15 +23,13 @@ func newBatch(prefix string) *batch {
 	}
 }
 
-func (b *batch) enqueue(m string) {
+func (b *batch) enqueue(m interface{}) {
 	b.elems = append(b.elems, m)
-	b.size += uint(len(m))
 }
 
 // dequeue takes the left most element. batch can't be empty.
-func (b *batch) dequeue() string {
+func (b *batch) dequeue() interface{} {
 	el := b.elems[0]
-	b.size -= uint(len(el))
 	b.elems = b.elems[1:]
 	return el
 
@@ -43,7 +40,7 @@ func (b *batch) len() int {
 }
 
 // peek at the last one. batch can't be empty.
-func (b *batch) peek() string {
+func (b *batch) peek() interface{} {
 	return b.elems[0]
 }
 
@@ -88,14 +85,14 @@ func openBatch(filename string) (*batch, error) {
 func deserialize(r io.Reader) (*batch, error) {
 	b := &batch{}
 	magic := make([]byte, len(magicNumber))
-	if _, err := r.Read(magic); err != nil {
+	if _, err := io.ReadFull(r, magic); err != nil {
 		return nil, err
 	}
 	if string(magic) != magicNumber {
 		return nil, errMagicNumber
 	}
 	dec := gob.NewDecoder(r)
-	var msgs []string
+	var msgs []interface{}
 	for {
 		err := dec.Decode(&msgs)
 		if err != nil {
