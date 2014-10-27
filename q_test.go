@@ -289,8 +289,7 @@ func TestNotAString(t *testing.T) {
 	q.Enqueue(42)
 	q.Close()
 
-	q, err = NewQ("./d/", "i")
-	if err != nil {
+	if q, err = NewQ("./d/", "i"); err != nil {
 		t.Fatal(err)
 	}
 	if got := q.Count(); got != 2 {
@@ -303,6 +302,28 @@ func TestNotAString(t *testing.T) {
 	}
 	if got := q.Count(); got != 0 {
 		t.Fatalf("Want 0, got %d msgs", got)
+	}
+	q.Close()
+}
+
+func TestEmptyRead(t *testing.T) {
+	// Can't read an empty queue after open.
+	d := setupDataDir()
+	q, err := NewQ(d, "i")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Enqueue(1)
+	q.Enqueue(42)
+	q.Close()
+
+	if q, err = NewQ("./d/", "i"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-q.Queue():
+		t.Fatal("Impossible read")
+	default:
 	}
 	q.Close()
 }

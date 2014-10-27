@@ -87,8 +87,8 @@ func (q *Q) Queue() <-chan interface{} {
 	return q.dequeue
 }
 
-// Count gives the total number of entries in the queue. Can be too high if
-// queue files are deleted by something else.
+// Count gives the total number of entries in the queue. The reported number
+// can be too high if queue files are deleted by something else.
 func (q *Q) Count() uint {
 	r := make(chan uint)
 	q.countReq <- r
@@ -110,14 +110,23 @@ func (q *Q) loop(existing []string) {
 		}
 		if b.len() == 0 {
 			// Empty batch. Weird.
+			if err = os.Remove(q.dir + "/" + f); err != nil {
+				log.Printf("can't remove batch: %v", err)
+			}
 			continue
 		}
+		count += uint(b.len())
 		if readBatch == nil {
-			// readBatch points to the oldest batch.
+			// readBatch points to the oldest batch...
 			readBatch = b
+			// ... which can't be on disk anymore.
+			if err = os.Remove(q.dir + "/" + f); err != nil {
+				log.Printf("can't remove batch: %v", err)
+			}
+			// We're reading this one. Don't add it to `batches`.
+			continue
 		}
 		batches = append(batches, b.filename)
-		count += uint(b.len())
 	}
 
 	writeBatch := newBatch(q.prefix)
