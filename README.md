@@ -64,5 +64,11 @@ eventually switch over to the same batch as the writer is using.
 TODO
 ----
 
+
 - Optionally limit maximum disk usage.
 - Handle errors in a better way than just logging them. Maybe an error channel?
+
+&c.
+---
+
+[![Build Status](https://travis-ci.org/alicebob/q.svg?branch=master)](https://travis-ci.org/alicebob/q)
