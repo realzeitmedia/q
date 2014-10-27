@@ -132,12 +132,19 @@ func TestWriteError(t *testing.T) {
 	}
 }
 
-func TestNoPrefix(t *testing.T) {
+func TestInvaludPrefix(t *testing.T) {
 	// Need a non-nil prefix.
 	d := setupDataDir()
-	_, err := NewQ(d, "")
-	if err == nil {
-		t.Fatalf("Didn't expect to be able to write.")
+	for prefix, valid := range map[string]bool{
+		"":        false,
+		"foobar":  true,
+		"foo/bar": false,
+		"foo-bar": false,
+	} {
+		_, err := NewQ(d, prefix)
+		if (err != nil) == valid {
+			t.Fatalf("Invalid invalid prefix: %s", prefix)
+		}
 	}
 }
 

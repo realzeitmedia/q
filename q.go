@@ -13,16 +13,17 @@ import (
 
 const (
 	// BlockCount is the number of entries the queue can have before entries are written
-	// to disk. The system can use maximum twice this number.
+	// to disk.
 	BlockCount    = 1024
 	magicNumber   = "QQ"
 	fileExtension = ".q"
 )
 
 var (
-	errMagicNumber   = errors.New("file not a Q file")
-	errDataError     = errors.New("invalid file format")
-	errInvalidPrefix = errors.New("invalid prefix")
+	errMagicNumber = errors.New("file not a Q file")
+	errDataError   = errors.New("invalid file format")
+	// ErrInvalidPrefix is potentially returned by NewQ.
+	ErrInvalidPrefix = errors.New("invalid prefix")
 )
 
 // Q is a queue which will use disk storage if it's too long.
@@ -34,11 +35,11 @@ type Q struct {
 	quit        chan chan struct{}
 }
 
-// NewQ makes or opens a Q, with files in and from <dir>/<prefix>-1234.q
-// prefix needs to be a simple, alphanumeric string.
+// NewQ makes or opens a Q, with files in and from <dir>/<prefix>-<timestamp>.q .
+// `prefix` needs to be a simple, alphanumeric string.
 func NewQ(dir, prefix string) (*Q, error) {
-	if len(prefix) == 0 {
-		return nil, errInvalidPrefix
+	if len(prefix) == 0 || strings.ContainsAny(prefix, ":-/") {
+		return nil, ErrInvalidPrefix
 	}
 	q := Q{
 		dir:      dir,
