@@ -96,25 +96,11 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 	for _, cb := range configs {
 		cb(&q)
 	}
+	existing, err := q.findExisting()
+	if err != nil {
+		return nil, err
+	}
 
-	// Look for existing files.
-	f, err := os.Open(dir)
-	if err != nil {
-		return nil, err
-	}
-	var existing []string
-	names, err := f.Readdirnames(-1)
-	if err != nil {
-		return nil, err
-	}
-	for _, name := range names {
-		if !strings.HasPrefix(name, prefix+"-") || !strings.HasSuffix(name, fileExtension) {
-			continue
-		}
-		existing = append(existing, name)
-	}
-	sort.Strings(existing)
-	f.Close()
 	go q.loop(existing)
 	return &q, nil
 }
@@ -159,49 +145,7 @@ type storedBatch struct {
 }
 
 func (q *Q) loop(existing []string) {
-	var batches []storedBatch
-
-	// Read existing files so we can continue were we left off.
-	var readBatch *batch // Point to either the first existing one, or the writeBatch.
-	// Check all files. We also like to know their length.
-	for _, f := range existing {
-		filename := q.dir + "/" + f
-		stat, err := os.Stat(filename)
-		if err != nil {
-			log.Printf("stat batch %v error: %v. Ignoring", f, err)
-			continue
-		}
-		fileSize := stat.Size()
-
-		b, err := openBatch(filename)
-		if err != nil {
-			log.Printf("open batch %v error: %v. Ignoring", f, err)
-			continue
-		}
-		if b.len() == 0 {
-			// Empty batch. Weird.
-			if err = os.Remove(q.dir + "/" + f); err != nil {
-				log.Printf("can't remove batch: %v", err)
-			}
-			continue
-		}
-		if readBatch == nil {
-			// readBatch points to the oldest batch...
-			readBatch = b
-			// ... which can't be on disk anymore.
-			if err = os.Remove(q.dir + "/" + f); err != nil {
-				log.Printf("can't remove batch: %v", err)
-			}
-			// We're reading this one. Don't add it to `batches`.
-			continue
-		}
-		batches = append(batches, storedBatch{
-			filename:  b.filename,
-			elemCount: b.len(),
-			fileSize:  fileSize,
-		})
-	}
-
+	readBatch, batches := q.loadExisting(existing)
 	writeBatch := newBatch(q.prefix)
 	if readBatch == nil {
 		readBatch = writeBatch
@@ -231,6 +175,7 @@ func (q *Q) loop(existing []string) {
 					log.Printf("error batch to disk: %v", err)
 				}
 			}
+			limitDiskUsage(q, batches)
 			close(c)
 			return
 		case r := <-q.countReq:
@@ -298,6 +243,76 @@ func (q *Q) loop(existing []string) {
 			}
 		}
 	}
+}
+
+// findExisting gives the filenames of saved batches.
+func (q *Q) findExisting() ([]string, error) {
+	f, err := os.Open(q.dir)
+	if err != nil {
+		return nil, err
+	}
+	var existing []string
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		if !strings.HasPrefix(name, q.prefix+"-") || !strings.HasSuffix(name, fileExtension) {
+			continue
+		}
+		existing = append(existing, name)
+	}
+	sort.Strings(existing)
+	f.Close()
+	return existing, nil
+}
+
+// loadExisting restores the state from disk. Besides all the batches it
+// also returns the first batch ready to read from (if any).
+func (q *Q) loadExisting(existing []string) (*batch, []storedBatch) {
+	var batches []storedBatch
+
+	// Read existing files so we can continue were we left off.
+	var readBatch *batch // Point to either the first existing one, or the writeBatch.
+	// Check all files. We also like to know their length.
+	for _, f := range existing {
+		filename := q.dir + "/" + f
+		stat, err := os.Stat(filename)
+		if err != nil {
+			log.Printf("stat batch %v error: %v. Ignoring", f, err)
+			continue
+		}
+		fileSize := stat.Size()
+
+		b, err := openBatch(filename)
+		if err != nil {
+			log.Printf("open batch %v error: %v. Ignoring", f, err)
+			continue
+		}
+		if b.len() == 0 {
+			// Empty batch. Weird.
+			if err = os.Remove(q.dir + "/" + f); err != nil {
+				log.Printf("can't remove batch: %v", err)
+			}
+			continue
+		}
+		if readBatch == nil {
+			// readBatch points to the oldest batch...
+			readBatch = b
+			// ... which can't be on disk anymore.
+			if err = os.Remove(q.dir + "/" + f); err != nil {
+				log.Printf("can't remove batch: %v", err)
+			}
+			// We're reading this one. Don't add it to `batches`.
+			continue
+		}
+		batches = append(batches, storedBatch{
+			filename:  b.filename,
+			elemCount: b.len(),
+			fileSize:  fileSize,
+		})
+	}
+	return readBatch, batches
 }
 
 // limitDiskUsage delete files if too much diskspace is being used.
