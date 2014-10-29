@@ -35,8 +35,8 @@ func (b *batch) dequeue() interface{} {
 
 }
 
-func (b *batch) len() int {
-	return len(b.elems)
+func (b *batch) len() uint {
+	return uint(len(b.elems))
 }
 
 // peek at the last one. batch can't be empty.
@@ -44,16 +44,17 @@ func (b *batch) peek() interface{} {
 	return b.elems[0]
 }
 
-func (b *batch) saveToDisk(dir string) (string, error) {
+// saveToDisk write the batch to disk. Returns the file size in bytes.
+func (b *batch) saveToDisk(dir string) (int, error) {
 	filename := dir + "/" + b.filename
 	fh, err := os.OpenFile(filename, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0600)
 	if err != nil {
-		return filename, err
+		return 0, err
 	}
 	defer fh.Close()
-	w := bufio.NewWriter(fh)
-	defer w.Flush()
-	return filename, b.serialize(w)
+	counter := newCountWriter(fh)
+	err = b.serialize(counter)
+	return counter.count, err
 }
 
 func (b *batch) serialize(w io.Writer) error {
@@ -105,4 +106,21 @@ func deserialize(r io.Reader) (*batch, error) {
 			b.enqueue(msg)
 		}
 	}
+}
+
+type countWriter struct {
+	f     io.Writer
+	count int
+}
+
+func newCountWriter(f io.Writer) *countWriter {
+	return &countWriter{
+		f: f,
+	}
+}
+
+func (c *countWriter) Write(b []byte) (int, error) {
+	n, err := c.f.Write(b)
+	c.count += n
+	return n, err
 }

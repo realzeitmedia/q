@@ -2,6 +2,8 @@ package q
 
 import (
 	"fmt"
+	"io/ioutil"
+	"log"
 	"math/rand"
 	"os"
 	"strings"
@@ -12,6 +14,7 @@ import (
 
 func init() {
 	rand.Seed(time.Now().Unix())
+	log.SetOutput(ioutil.Discard)
 }
 
 func setupDataDir() string {
@@ -53,6 +56,9 @@ func TestBasic(t *testing.T) {
 	}
 	if got := q.Count(); 0 != got {
 		t.Errorf("Want 0, got %#v", got)
+	}
+	if got, want := q.DiskUsage(), int64(0); want != got {
+		t.Errorf("Want %d, got %d", want, got)
 	}
 }
 
@@ -97,12 +103,9 @@ func TestBig(t *testing.T) {
 	}
 
 	d := setupDataDir()
-	checkFiles := func(want int) {
-		if got := fileCount(d); got != want {
-			t.Fatalf("Wrong number of files: got %d, want %d", got, want)
-		}
+	if got, want := fileCount(d), 0; got != want {
+		t.Fatalf("Wrong number of files: got %d, want %d", got, want)
 	}
-	checkFiles(0)
 
 	q, err := NewQ(d, "events")
 	if err != nil {
@@ -114,7 +117,13 @@ func TestBig(t *testing.T) {
 		q.Enqueue(fmt.Sprintf("Event %d: %s", i, strings.Repeat("0xDEAFBEEF", 300)))
 	}
 	// There should be something stored on disk.
-	checkFiles(8)
+	if got, want := fileCount(d), 8; got != want {
+		t.Fatalf("Wrong number of files: got %d, want %d", got, want)
+	}
+	// The wanted size was emperically determined.
+	if got, want := q.DiskUsage(), int64(24797384); want != got {
+		t.Errorf("Want %d, got %d", want, got)
+	}
 	for i := range make([]struct{}, eventCount) {
 		want := fmt.Sprintf("Event %d: %s", i, strings.Repeat("0xDEAFBEEF", 300))
 		if got := <-q.Queue(); want != got {
@@ -122,7 +131,9 @@ func TestBig(t *testing.T) {
 		}
 	}
 	// Everything is processed. All files should be gone.
-	checkFiles(0)
+	if got, want := fileCount(d), 0; got != want {
+		t.Fatalf("Wrong number of files: got %d, want %d", got, want)
+	}
 }
 
 func TestWriteError(t *testing.T) {
@@ -373,6 +384,83 @@ func TestEmptyRead(t *testing.T) {
 	default:
 	}
 	q.Close()
+}
+
+func TestMaxFiles(t *testing.T) {
+	// Limit the disk size.
+
+	eventCount := 10000
+	// 1000 * ~100bytes =~ 100Kb per block.
+	payload := strings.Repeat("0xDEAFBEEF", 10)
+
+	d := setupDataDir()
+	q, err := NewQ(d, "events", MaxDiskUsage(400*1024), BlockCount(1000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+
+	for j := 0; j < eventCount; j++ {
+		q.Enqueue(fmt.Sprintf("%d: %s", j, payload))
+	}
+	// There should be just three files left.
+	if got, want := fileCount(d), 3; got != want {
+		t.Fatalf("Wrong number of files: got %d, want %d", got, want)
+	}
+
+	if got, want := q.Count(), uint(4000); got != want {
+		t.Errorf("Want %d, got %d", want, got)
+	}
+
+	// Latest entries are discarded.
+	for i := 0; i < 4000; i++ {
+		want := fmt.Sprintf("%d: %s", i, payload)
+		if got := <-q.Queue(); want != got {
+			t.Fatalf("Want %#v, got %#v", want, got)
+		}
+	}
+}
+
+func TestMaxFilesOldest(t *testing.T) {
+	// Limit the disk size, but keep recent entries.
+
+	eventCount := 10000
+	// 1000 * ~100bytes =~ 100Kb per block.
+	payload := strings.Repeat("0xDEAFBEEF", 10)
+
+	d := setupDataDir()
+	q, err := NewQ(d, "events", BlockCount(1000), MaxDiskUsage(400*1024), EvictOldest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+
+	for j := 0; j < eventCount; j++ {
+		q.Enqueue(fmt.Sprintf("%d: %s", j, payload))
+	}
+	// There should be just three files left.
+	if got, want := fileCount(d), 3; got != want {
+		t.Fatalf("Wrong number of files: got %d, want %d", got, want)
+	}
+
+	if got, want := q.Count(), uint(4000); got != want {
+		t.Errorf("Want %d, got %d", want, got)
+	}
+
+	// Newest entries are discarded. The first block is not discarded, since
+	// it's being read from.
+	for i := 0; i < 1000; i++ {
+		want := fmt.Sprintf("%d: %s", i, payload)
+		if got := <-q.Queue(); want != got {
+			t.Fatalf("Want %#v, got %#v", want, got)
+		}
+	}
+	for i := 7000; i < eventCount; i++ {
+		want := fmt.Sprintf("%d: %s", i, payload)
+		if got := <-q.Queue(); want != got {
+			t.Fatalf("Want %#v, got %#v", want, got)
+		}
+	}
 }
 
 // fileCount is a helper to count files in a directory.

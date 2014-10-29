@@ -12,11 +12,10 @@ import (
 )
 
 const (
-	// BlockCount is the number of entries the queue can have before entries are written
-	// to disk.
-	BlockCount    = 1024
-	magicNumber   = "QQ"
-	fileExtension = ".q"
+	defaultblockCount    = 1024
+	defaultEvicionPolicy = evictNewest
+	magicNumber          = "QQ"
+	fileExtension        = ".q"
 )
 
 var (
@@ -28,27 +27,76 @@ var (
 
 // Q is a queue which will use disk storage if it's too long.
 type Q struct {
-	dir, prefix string
-	enqueue     chan interface{}
-	dequeue     chan interface{}
-	countReq    chan chan uint
-	quit        chan chan struct{}
+	dir, prefix    string
+	blockElemCount uint
+	maxDiskUsage   int64          // in bytes
+	evictionPolicy evictionPolicy // for maxDiskUsage
+	enqueue        chan interface{}
+	dequeue        chan interface{}
+	countReq       chan chan uint
+	diskusageReq   chan chan int64
+	quit           chan chan struct{}
+}
+
+// evictionPolicy determines if oldest or youngest files are removed on full
+// disk.
+type evictionPolicy int
+
+const (
+	evictNewest evictionPolicy = iota
+	evictOldest                = iota
+)
+
+type configcb func(q *Q)
+
+// MaxDiskUsage is an option for NewQ to limit the max disk spaced used (in bytes).
+// The default policy is to discard most recent entries, but that can be
+// changed with EvictOldest.
+func MaxDiskUsage(byteCount int64) configcb {
+	return func(q *Q) {
+		q.maxDiskUsage = byteCount
+	}
+}
+
+// BlockCount is the number of entries the queue can have before entries are written
+// to disk. It's also the number of entries per file. It's used as an
+// option to NewQ. The default is 1024.
+func BlockCount(count uint) configcb {
+	return func(q *Q) {
+		q.blockElemCount = count
+	}
+}
+
+// EvictOldest makes MaxDiskUsage() remove oldest entries. The default is the
+// opposite.
+func EvictOldest() configcb {
+	return func(q *Q) {
+		q.evictionPolicy = evictOldest
+	}
+
 }
 
 // NewQ makes or opens a Q, with files in and from <dir>/<prefix>-<timestamp>.q .
 // `prefix` needs to be a simple, alphanumeric string.
-func NewQ(dir, prefix string) (*Q, error) {
+func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 	if len(prefix) == 0 || strings.ContainsAny(prefix, ":-/") {
 		return nil, ErrInvalidPrefix
 	}
 	q := Q{
-		dir:      dir,
-		prefix:   prefix,
-		enqueue:  make(chan interface{}),
-		dequeue:  make(chan interface{}),
-		countReq: make(chan chan uint),
-		quit:     make(chan chan struct{}),
+		dir:            dir,
+		prefix:         prefix,
+		blockElemCount: defaultblockCount,
+		evictionPolicy: defaultEvicionPolicy,
+		enqueue:        make(chan interface{}),
+		dequeue:        make(chan interface{}),
+		countReq:       make(chan chan uint),
+		diskusageReq:   make(chan chan int64),
+		quit:           make(chan chan struct{}),
 	}
+	for _, cb := range configs {
+		cb(&q)
+	}
+
 	// Look for existing files.
 	f, err := os.Open(dir)
 	if err != nil {
@@ -96,15 +144,36 @@ func (q *Q) Count() uint {
 	return <-r
 }
 
+// DiskUsage gives the number of bytes used on disk. Entries in memory are not
+// counted.
+func (q *Q) DiskUsage() int64 {
+	r := make(chan int64)
+	q.diskusageReq <- r
+	return <-r
+}
+
+type storedBatch struct {
+	filename  string
+	elemCount uint
+	fileSize  int64
+}
+
 func (q *Q) loop(existing []string) {
-	var batches []string // batch file names.
-	count := uint(0)     // Total elements in our system.
+	var batches []storedBatch
 
 	// Read existing files so we can continue were we left off.
 	var readBatch *batch // Point to either the first existing one, or the writeBatch.
 	// Check all files. We also like to know their length.
 	for _, f := range existing {
-		b, err := openBatch(q.dir + "/" + f)
+		filename := q.dir + "/" + f
+		stat, err := os.Stat(filename)
+		if err != nil {
+			log.Printf("stat batch %v error: %v. Ignoring", f, err)
+			continue
+		}
+		fileSize := stat.Size()
+
+		b, err := openBatch(filename)
 		if err != nil {
 			log.Printf("open batch %v error: %v. Ignoring", f, err)
 			continue
@@ -116,7 +185,6 @@ func (q *Q) loop(existing []string) {
 			}
 			continue
 		}
-		count += uint(b.len())
 		if readBatch == nil {
 			// readBatch points to the oldest batch...
 			readBatch = b
@@ -127,7 +195,11 @@ func (q *Q) loop(existing []string) {
 			// We're reading this one. Don't add it to `batches`.
 			continue
 		}
-		batches = append(batches, b.filename)
+		batches = append(batches, storedBatch{
+			filename:  b.filename,
+			elemCount: b.len(),
+			fileSize:  fileSize,
+		})
 	}
 
 	writeBatch := newBatch(q.prefix)
@@ -162,36 +234,53 @@ func (q *Q) loop(existing []string) {
 			close(c)
 			return
 		case r := <-q.countReq:
+			count := writeBatch.len()
+			if readBatch != writeBatch {
+				count += readBatch.len()
+			}
+			for _, b := range batches {
+				count += b.elemCount
+			}
 			r <- count
+		case r := <-q.diskusageReq:
+			bcount := int64(0)
+			for _, b := range batches {
+				bcount += b.fileSize
+			}
+			r <- bcount
 		case in := <-q.enqueue:
-			count++
 			writeBatch.enqueue(in)
-			if writeBatch.len() > BlockCount {
+			if writeBatch.len() >= q.blockElemCount {
 				if readBatch == writeBatch {
 					// Don't write to disk, read is already reading from this
 					// batch.
 					writeBatch = newBatch(q.prefix)
 					continue
 				}
-				if _, err := writeBatch.saveToDisk(q.dir); err != nil {
+				fileSize, err := writeBatch.saveToDisk(q.dir)
+				if err != nil {
 					log.Printf("error writing batch to disk: %v", err)
 					writeBatch = newBatch(q.prefix)
 					continue
 				}
-				batches = append(batches, writeBatch.filename)
+				batches = append(batches, storedBatch{
+					filename:  writeBatch.filename,
+					elemCount: writeBatch.len(),
+					fileSize:  int64(fileSize),
+				})
 				writeBatch = newBatch(q.prefix)
+				batches = limitDiskUsage(q, batches)
 			}
 		case out <- nextUp:
 			// Note: this case is only enabled when the queue is not empty.
 			readBatch.dequeue()
-			count--
 			out = nil
 			if readBatch.len() == 0 {
 			AGAIN:
 				// Finished with this batch. Open the next one, if any.
 				if len(batches) > 0 {
 					var err error
-					filename := batches[0]
+					filename := batches[0].filename
 					readBatch, err = openBatch(q.dir + "/" + filename)
 					batches = batches[1:]
 					if err != nil {
@@ -208,5 +297,51 @@ func (q *Q) loop(existing []string) {
 				}
 			}
 		}
+	}
+}
+
+// limitDiskUsage delete files if too much diskspace is being used.
+func limitDiskUsage(q *Q, batches []storedBatch) []storedBatch {
+	if q.maxDiskUsage == 0 {
+		// No configured limit.
+		return batches
+	}
+	// Delete most recent ones.
+	switch q.evictionPolicy {
+	default:
+		panic("impossible eviction policy")
+	case evictNewest:
+		acceptedBatches := make([]storedBatch, 0, len(batches))
+		bcount := int64(0)
+		for _, b := range batches {
+			if bcount+b.fileSize > q.maxDiskUsage {
+				log.Printf("removing batch due to disk usage: %s (%d elems)", b.filename, b.elemCount)
+				if err := os.Remove(q.dir + "/" + b.filename); err != nil {
+					log.Printf("can't remove batch: %v", err)
+				}
+				continue
+			}
+			acceptedBatches = append(acceptedBatches, b)
+			bcount += b.fileSize
+		}
+		return acceptedBatches
+	case evictOldest:
+		// First count the total, then remove from the beginning
+		for len(batches) > 0 {
+			bcount := int64(0)
+			for _, b := range batches {
+				bcount += b.fileSize
+			}
+			if bcount <= q.maxDiskUsage {
+				return batches
+			}
+			b := batches[0]
+			log.Printf("removing batch due to disk usage: %s (%d elems)", b.filename, b.elemCount)
+			if err := os.Remove(q.dir + "/" + b.filename); err != nil {
+				log.Printf("can't remove batch: %v", err)
+			}
+			batches = batches[1:]
+		}
+		return batches
 	}
 }
