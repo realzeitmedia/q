@@ -58,17 +58,18 @@ func MaxDiskUsage(byteCount int64) configcb {
 	}
 }
 
-// BlockCount is the number of entries the queue can have before entries are written
-// to disk. It's also the number of entries per file. It's used as an
-// option to NewQ. The default is 1024.
+// BlockCount is an option for NewQ. It is the number of entries the queue can
+// have before entries are written to disk. It's also the number of entries per
+// file.  The default is 1024.
 func BlockCount(count uint) configcb {
 	return func(q *Q) {
 		q.blockElemCount = count
 	}
 }
 
-// EvictOldest makes MaxDiskUsage() remove oldest entries. The default is the
-// opposite.
+// EvictOldest is an option for NewQ, which modified the MaxDiskUsage
+// bahaviour. It makes MaxDiskUsage() remove oldest entries, while the default
+// is the opposite.
 func EvictOldest() configcb {
 	return func(q *Q) {
 		q.evictionPolicy = evictOldest
