@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -28,6 +29,7 @@ var (
 // Q is a queue which will use disk storage if it's too long.
 type Q struct {
 	dir, prefix    string
+	elemType       reflect.Type
 	blockElemCount uint
 	maxDiskUsage   int64          // in bytes
 	evictionPolicy evictionPolicy // for maxDiskUsage
@@ -77,6 +79,16 @@ func EvictOldest() configcb {
 
 }
 
+// ElemType is an option for NewQ. It is used to set the type of the element
+// (this is needed for the `gob` decoding). The default is a string.
+// Usage: q.NewQ("/var/q", "test", q.ElemType(MyStruct{}))
+func ElemType(e interface{}) configcb {
+	return func(q *Q) {
+		q.elemType = reflect.TypeOf(e)
+	}
+
+}
+
 // NewQ makes or opens a Q, with files in and from <dir>/<prefix>-<timestamp>.q .
 // `prefix` needs to be a simple, alphanumeric string.
 func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
@@ -86,6 +98,7 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 	q := Q{
 		dir:            dir,
 		prefix:         prefix,
+		elemType:       reflect.TypeOf(""),
 		blockElemCount: defaultblockCount,
 		evictionPolicy: defaultEvicionPolicy,
 		enqueue:        make(chan interface{}),
@@ -227,7 +240,8 @@ func (q *Q) loop(existing []string) {
 				if len(batches) > 0 {
 					var err error
 					filename := batches[0].filename
-					readBatch, err = openBatch(q.dir + "/" + filename)
+					readBatch, err = openBatch(q.dir+"/"+filename,
+						q.elemType)
 					batches = batches[1:]
 					if err != nil {
 						// Skip this file for this run. Don't delete it.
@@ -285,7 +299,7 @@ func (q *Q) loadExisting(existing []string) (*batch, []storedBatch) {
 		}
 		fileSize := stat.Size()
 
-		b, err := openBatch(filename)
+		b, err := openBatch(filename, q.elemType)
 		if err != nil {
 			log.Printf("open batch %v error: %v. Ignoring", f, err)
 			continue

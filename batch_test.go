@@ -7,6 +7,7 @@ import (
 )
 
 func TestBatchSerialize(t *testing.T) {
+	typ := reflect.TypeOf("")
 	b := newBatch("")
 	b.enqueue("first")
 	b.enqueue("second")
@@ -20,13 +21,11 @@ func TestBatchSerialize(t *testing.T) {
 	}
 
 	// ...and back again to batch.
-	again, err := deserialize(bytes.NewBuffer(buf.Bytes()))
+	again, err := deserialize(bytes.NewBuffer(buf.Bytes()), typ)
 	if err != nil {
 		t.Fatalf("unexpected deserialize error: %v", err)
 	}
-	again.filename = ""
-	b.filename = ""
-	if !reflect.DeepEqual(again, b) {
+	if !reflect.DeepEqual(again.elems, b.elems) {
 		t.Fatalf("deserialize not the same. Want %#v, got %#v", b, again)
 	}
 }

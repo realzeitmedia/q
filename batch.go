@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"reflect"
 	"syscall"
 	"time"
 )
@@ -63,19 +64,21 @@ func (b *batch) serialize(w io.Writer) error {
 		return err
 	}
 	enc := gob.NewEncoder(w)
-	if err = enc.Encode(b.elems); err != nil {
-		return err
+	for _, elem := range b.elems {
+		if err = enc.EncodeValue(reflect.ValueOf(elem)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func openBatch(filename string) (*batch, error) {
+func openBatch(filename string, typ reflect.Type) (*batch, error) {
 	fh, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
 	defer fh.Close()
-	b, err := deserialize(bufio.NewReader(fh))
+	b, err := deserialize(bufio.NewReader(fh), typ)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +86,7 @@ func openBatch(filename string) (*batch, error) {
 	return b, nil
 }
 
-func deserialize(r io.Reader) (*batch, error) {
+func deserialize(r io.Reader, typ reflect.Type) (*batch, error) {
 	b := &batch{}
 	magic := make([]byte, len(magicNumber))
 	if _, err := io.ReadFull(r, magic); err != nil {
@@ -93,18 +96,16 @@ func deserialize(r io.Reader) (*batch, error) {
 		return nil, errMagicNumber
 	}
 	dec := gob.NewDecoder(r)
-	var msgs []interface{}
 	for {
-		err := dec.Decode(&msgs)
+		msg := reflect.New(typ)
+		err := dec.DecodeValue(msg)
 		if err != nil {
 			if err == io.EOF {
 				return b, nil
 			}
 			return nil, err
 		}
-		for _, msg := range msgs {
-			b.enqueue(msg)
-		}
+		b.enqueue(msg.Interface())
 	}
 }
 

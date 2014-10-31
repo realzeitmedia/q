@@ -145,7 +145,7 @@ func TestWriteError(t *testing.T) {
 	}
 }
 
-func TestInvaludPrefix(t *testing.T) {
+func TestInvalidPrefix(t *testing.T) {
 	// Need a non-nil prefix.
 	d := setupDataDir()
 	for prefix, valid := range map[string]bool{
@@ -357,6 +357,67 @@ func TestNotAString(t *testing.T) {
 	}
 	for _, want := range []int{1, 42} {
 		if got := <-q.Queue(); got != want {
+			t.Fatalf("Want %v, got %v msgs", want, got)
+		}
+	}
+	if got := q.Count(); got != 0 {
+		t.Fatalf("Want 0, got %d msgs", got)
+	}
+	q.Close()
+}
+
+func TestStruct(t *testing.T) {
+	// Queue a struct
+	type QueueEntry struct {
+		Type  string `json:"type"`
+		RegID string `json:"reg_id"`
+		Index string `json:"index"`
+		Msg   string `json:"msg"`
+	}
+	d := setupDataDir()
+	q, err := libq.NewQ(d, "i", libq.ElemType(QueueEntry{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Enqueue(QueueEntry{
+		Type:  "typea",
+		RegID: "123",
+		Index: "main",
+		Msg:   "Hello world",
+	})
+	q.Enqueue(QueueEntry{
+		Type:  "typea",
+		RegID: "124",
+		Index: "main",
+		Msg:   "Hello again, world",
+	})
+	q.Close()
+
+	if q, err = libq.NewQ("./d/", "i", libq.ElemType(QueueEntry{})); err != nil {
+		t.Fatal(err)
+	}
+	if got := q.Count(); got != 2 {
+		t.Fatalf("Want 2, got %d msgs", got)
+	}
+	{
+		want := QueueEntry{
+			Type:  "typea",
+			RegID: "123",
+			Index: "main",
+			Msg:   "Hello world",
+		}
+		if got := <-q.Queue(); *(got.(*QueueEntry)) != want {
+			t.Fatalf("Want %v, got %v msgs", want, got)
+		}
+	}
+	{
+		want := QueueEntry{
+			Type:  "typea",
+			RegID: "124",
+			Index: "main",
+			Msg:   "Hello again, world",
+		}
+		if got := <-q.Queue(); *(got.(*QueueEntry)) != want {
 			t.Fatalf("Want %v, got %v msgs", want, got)
 		}
 	}
