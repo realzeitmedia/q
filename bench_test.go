@@ -1,8 +1,10 @@
-package q
+package q_test
 
 import (
 	"strings"
 	"testing"
+
+	libq "github.com/alicebob/q"
 )
 
 func BenchmarkSeq(b *testing.B) {
@@ -13,7 +15,7 @@ func BenchmarkSeq(b *testing.B) {
 	)
 
 	d := setupDataDir()
-	q, err := NewQ(d, "events")
+	q, err := libq.NewQ(d, "events")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -40,7 +42,7 @@ func BenchmarkMulti(b *testing.B) {
 	)
 
 	d := setupDataDir()
-	q, err := NewQ(d, "events")
+	q, err := libq.NewQ(d, "events")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -71,7 +73,7 @@ func BenchmarkStarved(b *testing.B) {
 	)
 
 	d := setupDataDir()
-	q, err := NewQ(d, "events")
+	q, err := libq.NewQ(d, "events")
 	if err != nil {
 		b.Fatal(err)
 	}

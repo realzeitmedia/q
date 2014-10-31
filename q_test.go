@@ -1,4 +1,4 @@
-package q
+package q_test
 
 import (
 	"fmt"
@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	libq "github.com/alicebob/q"
 )
 
 func init() {
@@ -28,7 +30,7 @@ func setupDataDir() string {
 func TestBasic(t *testing.T) {
 	// Non-file based queueing.
 	d := setupDataDir()
-	q, err := NewQ(d, "events")
+	q, err := libq.NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +67,7 @@ func TestBasic(t *testing.T) {
 func TestBlock(t *testing.T) {
 	// Read should block until there is something.
 	d := setupDataDir()
-	q, err := NewQ(d, "events")
+	q, err := libq.NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +109,7 @@ func TestBig(t *testing.T) {
 		t.Fatalf("Wrong number of files: got %d, want %d", got, want)
 	}
 
-	q, err := NewQ(d, "events")
+	q, err := libq.NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +139,7 @@ func TestBig(t *testing.T) {
 }
 
 func TestWriteError(t *testing.T) {
-	_, err := NewQ("/no/such/dir", "events")
+	_, err := libq.NewQ("/no/such/dir", "events")
 	if err == nil {
 		t.Fatalf("Didn't expect to be able to write.")
 	}
@@ -152,7 +154,7 @@ func TestInvaludPrefix(t *testing.T) {
 		"foo/bar": false,
 		"foo-bar": false,
 	} {
-		_, err := NewQ(d, prefix)
+		_, err := libq.NewQ(d, prefix)
 		if (err != nil) == valid {
 			t.Fatalf("Invalid invalid prefix: %s", prefix)
 		}
@@ -166,7 +168,7 @@ func TestAsync(t *testing.T) {
 
 	// Random sleep readers and writers.
 	d := setupDataDir()
-	q, err := NewQ(d, "events")
+	q, err := libq.NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +209,7 @@ func TestMany(t *testing.T) {
 	clients := 10
 
 	d := setupDataDir()
-	q, err := NewQ(d, "events")
+	q, err := libq.NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,10 +248,10 @@ func TestMany2(t *testing.T) {
 	}
 
 	eventCount := 1000000
-	clients := 10
+	clients := 100
 
 	d := setupDataDir()
-	q, err := NewQ(d, "events")
+	q, err := libq.NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +284,7 @@ func TestMany2(t *testing.T) {
 func TestReopen1(t *testing.T) {
 	// Simple reopening.
 	d := setupDataDir()
-	q, err := NewQ(d, "events")
+	q, err := libq.NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +292,7 @@ func TestReopen1(t *testing.T) {
 	q.Enqueue("Message 2")
 	q.Close()
 
-	q, err = NewQ("./d/", "events")
+	q, err = libq.NewQ("./d/", "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +310,7 @@ func TestReopen1(t *testing.T) {
 func TestReopen2(t *testing.T) {
 	// Reopening with different read and write batches.
 	d := setupDataDir()
-	q, err := NewQ(d, "events")
+	q, err := libq.NewQ(d, "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +322,7 @@ func TestReopen2(t *testing.T) {
 	}
 	q.Close()
 
-	q, err = NewQ("./d/", "events")
+	q, err = libq.NewQ("./d/", "events")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +341,7 @@ func TestReopen2(t *testing.T) {
 func TestNotAString(t *testing.T) {
 	// Queue not-a-string.
 	d := setupDataDir()
-	q, err := NewQ(d, "i")
+	q, err := libq.NewQ(d, "i")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +349,7 @@ func TestNotAString(t *testing.T) {
 	q.Enqueue(42)
 	q.Close()
 
-	if q, err = NewQ("./d/", "i"); err != nil {
+	if q, err = libq.NewQ("./d/", "i"); err != nil {
 		t.Fatal(err)
 	}
 	if got := q.Count(); got != 2 {
@@ -367,7 +369,7 @@ func TestNotAString(t *testing.T) {
 func TestEmptyRead(t *testing.T) {
 	// Can't read an empty queue after open.
 	d := setupDataDir()
-	q, err := NewQ(d, "i")
+	q, err := libq.NewQ(d, "i")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +377,7 @@ func TestEmptyRead(t *testing.T) {
 	q.Enqueue(42)
 	q.Close()
 
-	if q, err = NewQ("./d/", "i"); err != nil {
+	if q, err = libq.NewQ("./d/", "i"); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -394,7 +396,7 @@ func TestMaxFiles(t *testing.T) {
 	payload := strings.Repeat("0xDEAFBEEF", 10)
 
 	d := setupDataDir()
-	q, err := NewQ(d, "events", MaxDiskUsage(400*1024), BlockCount(1000))
+	q, err := libq.NewQ(d, "events", libq.MaxDiskUsage(350*1024), libq.BlockCount(1000))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,6 +421,9 @@ func TestMaxFiles(t *testing.T) {
 			t.Fatalf("Want %#v, got %#v", want, got)
 		}
 	}
+	if got, want := q.Count(), uint(0); got != want {
+		t.Errorf("Want %d, got %d", want, got)
+	}
 }
 
 func TestMaxFilesOldest(t *testing.T) {
@@ -429,7 +434,8 @@ func TestMaxFilesOldest(t *testing.T) {
 	payload := strings.Repeat("0xDEAFBEEF", 10)
 
 	d := setupDataDir()
-	q, err := NewQ(d, "events", BlockCount(1000), MaxDiskUsage(400*1024), EvictOldest())
+	q, err := libq.NewQ(d, "events",
+		libq.BlockCount(1000), libq.MaxDiskUsage(400*1024), libq.EvictOldest())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,6 +466,9 @@ func TestMaxFilesOldest(t *testing.T) {
 		if got := <-q.Queue(); want != got {
 			t.Fatalf("Want %#v, got %#v", want, got)
 		}
+	}
+	if got, want := q.Count(), uint(0); got != want {
+		t.Errorf("Want %d, got %d", want, got)
 	}
 }
 
