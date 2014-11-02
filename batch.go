@@ -3,57 +3,40 @@ package q
 import (
 	"bufio"
 	"encoding/gob"
-	"fmt"
 	"io"
 	"os"
-	"path"
 	"syscall"
-	"time"
 )
 
 // batch is a chunk of elements, which might go to disk.
 type batch struct {
-	filename string // Need to be ordered alphabetically
-	elems    []interface{}
+	elems []string
 }
 
-func newBatch(prefix string) *batch {
-	return &batch{
-		filename: fmt.Sprintf("%s-%020d%s", prefix, time.Now().UnixNano(), fileExtension),
+func newBatch(q chan string) *batch {
+	elems := make([]string, 0, len(q))
+	for e := range q {
+		elems = append(elems, e)
 	}
-}
-
-func (b *batch) enqueue(m interface{}) {
-	b.elems = append(b.elems, m)
-}
-
-// dequeue takes the left most element. batch can't be empty.
-func (b *batch) dequeue() interface{} {
-	el := b.elems[0]
-	b.elems = b.elems[1:]
-	return el
-
+	return &batch{
+		elems: elems,
+	}
 }
 
 func (b *batch) len() int {
 	return len(b.elems)
 }
 
-// peek at the last one. batch can't be empty.
-func (b *batch) peek() interface{} {
-	return b.elems[0]
-}
-
-func (b *batch) saveToDisk(dir string) (string, error) {
-	filename := dir + "/" + b.filename
+// saveToDisk write the batch to disk. Returns the file size in bytes.
+func (b *batch) saveToDisk(filename string) (int, error) {
 	fh, err := os.OpenFile(filename, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL, 0600)
 	if err != nil {
-		return filename, err
+		return 0, err
 	}
 	defer fh.Close()
-	w := bufio.NewWriter(fh)
-	defer w.Flush()
-	return filename, b.serialize(w)
+	counter := newCountWriter(fh)
+	err = b.serialize(counter)
+	return counter.count, err
 }
 
 func (b *batch) serialize(w io.Writer) error {
@@ -68,7 +51,7 @@ func (b *batch) serialize(w io.Writer) error {
 	return nil
 }
 
-func openBatch(filename string) (*batch, error) {
+func openBatch(filename string) (queuechunk, error) {
 	fh, err := os.Open(filename)
 	if err != nil {
 		return nil, err
@@ -78,8 +61,13 @@ func openBatch(filename string) (*batch, error) {
 	if err != nil {
 		return nil, err
 	}
-	b.filename = path.Base(filename)
-	return b, nil
+
+	q := make(queuechunk, b.len())
+	for _, e := range b.elems {
+		q <- e
+	}
+	close(q)
+	return q, nil
 }
 
 func deserialize(r io.Reader) (*batch, error) {
@@ -91,18 +79,35 @@ func deserialize(r io.Reader) (*batch, error) {
 	if string(magic) != magicNumber {
 		return nil, errMagicNumber
 	}
+
 	dec := gob.NewDecoder(r)
-	var msgs []interface{}
+	var elems []string
 	for {
-		err := dec.Decode(&msgs)
+		err := dec.Decode(&elems)
 		if err != nil {
 			if err == io.EOF {
+				b.elems = elems
 				return b, nil
 			}
 			return nil, err
 		}
-		for _, msg := range msgs {
-			b.enqueue(msg)
-		}
 	}
+}
+
+// countWriter counts the number of bytes written.
+type countWriter struct {
+	f     io.Writer
+	count int
+}
+
+func newCountWriter(f io.Writer) *countWriter {
+	return &countWriter{
+		f: f,
+	}
+}
+
+func (c *countWriter) Write(b []byte) (int, error) {
+	n, err := c.f.Write(b)
+	c.count += n
+	return n, err
 }

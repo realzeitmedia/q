@@ -17,7 +17,7 @@ func Example() {
 	go func() {
 		for msg := range queue.Queue() {
 			// Do something with msg which can potentially block.
-			fmt.Println(msg.(string))
+			fmt.Println(msg)
 		}
 	}()
 

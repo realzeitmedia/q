@@ -5,18 +5,20 @@ package q
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 const (
-	// BlockCount is the number of entries the queue can have before entries are written
-	// to disk.
-	BlockCount    = 1024
-	magicNumber   = "QQ"
-	fileExtension = ".q"
+	defaultblockCount    = 1024
+	defaultEvicionPolicy = evictNewest
+	magicNumber          = "QQ"
+	fileExtension        = ".q"
 )
 
 var (
@@ -26,48 +28,237 @@ var (
 	ErrInvalidPrefix = errors.New("invalid prefix")
 )
 
-// Q is a queue which will use disk storage if it's too long.
+type queuechunk chan string
+
+// Q is a queue which will use disk storage if it's too bog.
 type Q struct {
-	dir, prefix string
-	enqueue     chan interface{}
-	dequeue     chan interface{}
-	countReq    chan chan uint
-	quit        chan chan struct{}
+	dir, prefix    string
+	blockElemCount uint
+	maxDiskUsage   int64          // in bytes
+	evictionPolicy evictionPolicy // for maxDiskUsage
+	enqueue        queuechunk
+	dequeue        queuechunk
+	countReq       chan chan int
+	diskusageReq   chan chan int64
+	quit           chan chan struct{}
+}
+
+// evictionPolicy determines if oldest or youngest files are removed on full
+// disk.
+type evictionPolicy int
+
+const (
+	evictNewest evictionPolicy = iota
+	evictOldest                = iota
+)
+
+type configcb func(q *Q)
+
+// MaxDiskUsage is an option for NewQ to limit the max disk spaced used (in bytes).
+// The default policy is to discard most recent entries, but that can be
+// changed with EvictOldest.
+func MaxDiskUsage(byteCount int64) configcb {
+	return func(q *Q) {
+		q.maxDiskUsage = byteCount
+	}
+}
+
+// BlockCount is an option for NewQ. It is the number of entries the queue can
+// have before entries are written to disk. It's also the number of entries per
+// file.  The default is 1024.
+func BlockCount(count uint) configcb {
+	return func(q *Q) {
+		q.blockElemCount = count
+	}
+}
+
+// EvictOldest is an option for NewQ, which modified the MaxDiskUsage
+// bahaviour. It makes MaxDiskUsage() remove oldest entries, while the default
+// is the opposite.
+func EvictOldest() configcb {
+	return func(q *Q) {
+		q.evictionPolicy = evictOldest
+	}
+
 }
 
 // NewQ makes or opens a Q, with files in and from <dir>/<prefix>-<timestamp>.q .
 // `prefix` needs to be a simple, alphanumeric string.
-func NewQ(dir, prefix string) (*Q, error) {
+func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 	if len(prefix) == 0 || strings.ContainsAny(prefix, ":-/") {
 		return nil, ErrInvalidPrefix
 	}
 	q := Q{
-		dir:      dir,
-		prefix:   prefix,
-		enqueue:  make(chan interface{}),
-		dequeue:  make(chan interface{}),
-		countReq: make(chan chan uint),
-		quit:     make(chan chan struct{}),
+		dir:            dir,
+		prefix:         prefix,
+		blockElemCount: defaultblockCount,
+		evictionPolicy: defaultEvicionPolicy,
+		enqueue:        make(queuechunk),
+		dequeue:        make(queuechunk),
+		countReq:       make(chan chan int),
+		diskusageReq:   make(chan chan int64),
+		quit:           make(chan chan struct{}),
 	}
-	// Look for existing files.
-	f, err := os.Open(dir)
+	for _, cb := range configs {
+		cb(&q)
+	}
+	existing, err := q.findExisting()
 	if err != nil {
 		return nil, err
 	}
-	var existing []string
-	names, err := f.Readdirnames(-1)
-	if err != nil {
-		return nil, err
+
+	enqueuerWg := sync.WaitGroup{}
+	loopWg := sync.WaitGroup{}
+
+	// incoming queues
+	metaWriteQueue := make(chan queuechunk, 1)
+	metaReadQueue := make(chan queuechunk)
+	readQueue, queues := q.loadExisting(existing)
+
+	var selectQueueRead chan queuechunk // nil until the first block is done.
+	if len(readQueue) > 0 {
+		selectQueueRead = metaReadQueue
 	}
-	for _, name := range names {
-		if !strings.HasPrefix(name, prefix+"-") || !strings.HasSuffix(name, fileExtension) {
-			continue
+
+	// Quit monitor.
+	go func() {
+		c := <-q.quit
+		// stop the enqueuer
+		close(q.enqueue)
+		enqueuerWg.Wait()
+
+		// The main loop should shut down, so we can close the metaReadQueue
+		loopWg.Wait()
+
+		// Save the non-read messages to disk.
+		{
+			batch := newBatch(q.dequeue)
+			if batch.len() > 0 {
+				if _, err := batch.saveToDisk(q.batchFilename(0)); err != nil {
+					log.Printf("error writing batch to disk: %v", err)
+				}
+			}
 		}
-		existing = append(existing, name)
-	}
-	sort.Strings(existing)
-	f.Close()
-	go q.loop(existing)
+		// The dequeuer must be down by now. It closed the dequeue channel.
+
+		c <- struct{}{}
+	}()
+
+	loopWg.Add(1)
+	go func() {
+		defer loopWg.Done()
+		for {
+			select {
+
+			case queue, ok := <-metaWriteQueue:
+				// The writer deemed the last one full.
+				if !ok {
+					close(metaReadQueue)
+					if readQueue != nil {
+						// Save the queue which will never be reached anymore
+						batch := newBatch(readQueue)
+						if _, err := batch.saveToDisk(q.batchFilename(1)); err != nil {
+							log.Printf("error writing batch to disk: %v", err)
+						}
+					}
+					return
+				}
+
+				if selectQueueRead == nil {
+					// Keep this queue in memory, it'll be used as the next
+					// queue.
+					selectQueueRead = metaReadQueue
+					readQueue = queue
+					continue
+				}
+
+				// It's not being read from. Store it.
+				batch := newBatch(queue)
+				filename := q.batchFilename(time.Now().UnixNano())
+				fileSize, err := batch.saveToDisk(filename)
+				if err != nil {
+					log.Printf("error writing batch to disk: %v", err)
+					continue
+				}
+				queues = append(queues, storedBatch{
+					elemCount: batch.len(),
+					fileSize:  int64(fileSize),
+					filename:  filename,
+				})
+
+			case selectQueueRead <- readQueue:
+				// The last complete block is dequeued. See if there is a
+				// something in our block queue.
+			AGAIN:
+				if len(queues) > 0 {
+					readBatch := queues[0]
+					queues = queues[1:]
+
+					var err error
+					readQueue, err = openBatch(readBatch.filename)
+					if err != nil {
+						// Skip this file for this run. Don't delete it.
+						log.Printf("open batch %v error: %v", readBatch.filename, err)
+						goto AGAIN
+					}
+					if err = os.Remove(readBatch.filename); err != nil {
+						log.Printf("can't remove batch: %v, igoring", err)
+						// otherwise we would replay it again next run.
+						goto AGAIN
+					}
+					break
+				}
+				// Nothing there. Wait for a block.
+				readQueue = nil
+				selectQueueRead = nil
+
+			case r := <-q.countReq:
+				count := len(readQueue)
+				for _, b := range queues {
+					count += b.elemCount
+				}
+				r <- count
+
+			case r := <-q.diskusageReq:
+				bcount := int64(0)
+				for _, b := range queues {
+					bcount += b.fileSize
+				}
+				r <- bcount
+			}
+		}
+	}()
+
+	enqueuerWg.Add(1)
+	go func() {
+		defer enqueuerWg.Done()
+		queue := make(chan string, q.blockElemCount)
+		for msg := range q.enqueue {
+		AGAIN:
+			select {
+			case queue <- msg:
+			default:
+				// Queue full. Send it to the big loop.
+				close(queue)
+				metaWriteQueue <- queue
+				queue = make(chan string, q.blockElemCount)
+				goto AGAIN
+			}
+		}
+		close(queue)
+		metaWriteQueue <- queue
+		close(metaWriteQueue)
+	}()
+
+	go func() {
+		defer close(q.dequeue)
+		for readQueue := range metaReadQueue {
+			for msg := range readQueue {
+				q.dequeue <- msg
+			}
+		}
+	}()
+
 	return &q, nil
 }
 
@@ -79,134 +270,150 @@ func (q *Q) Close() {
 }
 
 // Enqueue adds a message to the queue.
-func (q *Q) Enqueue(m interface{}) {
+func (q *Q) Enqueue(m string) {
 	q.enqueue <- m
 }
 
-// Queue gives the channel to read queue entries from.
-func (q *Q) Queue() <-chan interface{} {
+// Queue gives the channel to read queue entries from. Multiple readers of this
+// channel is OK. The channel will be closed on shutdown via Close().
+func (q *Q) Queue() <-chan string {
 	return q.dequeue
 }
 
-// Count gives the total number of entries in the queue. The reported number
-// can be too high if queue files are deleted by something else.
-func (q *Q) Count() uint {
-	r := make(chan uint)
+// Count gives the total number of entries in the queue stored on disk(!), and
+// a few from memory. This method is only for ballpark numbers.
+func (q *Q) Count() int {
+	r := make(chan int)
 	q.countReq <- r
 	return <-r
 }
 
-func (q *Q) loop(existing []string) {
-	var batches []string // batch file names.
-	count := uint(0)     // Total elements in our system.
+// DiskUsage gives the number of bytes used on disk. Entries in memory are not
+// counted.
+func (q *Q) DiskUsage() int64 {
+	r := make(chan int64)
+	q.diskusageReq <- r
+	return <-r
+}
 
-	// Read existing files so we can continue were we left off.
-	var readBatch *batch // Point to either the first existing one, or the writeBatch.
+type storedBatch struct {
+	filename  string
+	elemCount int
+	fileSize  int64
+}
+
+// findExisting gives the filenames of saved batches.
+func (q *Q) findExisting() ([]string, error) {
+	f, err := os.Open(q.dir)
+	if err != nil {
+		return nil, err
+	}
+	var existing []string
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		if !strings.HasPrefix(name, q.prefix+"-") || !strings.HasSuffix(name, fileExtension) {
+			continue
+		}
+		existing = append(existing, name)
+	}
+	sort.Strings(existing)
+	f.Close()
+	return existing, nil
+}
+
+// loadExisting reads the state from disk. It'll also return a queue for the
+// first block, or nil.
+func (q *Q) loadExisting(existing []string) (chan string, []storedBatch) {
+	var batches []storedBatch
+	var firstQueue chan string
 	// Check all files. We also like to know their length.
 	for _, f := range existing {
-		b, err := openBatch(q.dir + "/" + f)
+		filename := q.dir + "/" + f
+		stat, err := os.Stat(filename)
+		if err != nil {
+			log.Printf("stat batch %v error: %v. Ignoring", f, err)
+			continue
+		}
+		fileSize := stat.Size()
+
+		qb, err := openBatch(filename)
 		if err != nil {
 			log.Printf("open batch %v error: %v. Ignoring", f, err)
 			continue
 		}
-		if b.len() == 0 {
+		if len(qb) == 0 {
 			// Empty batch. Weird.
 			if err = os.Remove(q.dir + "/" + f); err != nil {
 				log.Printf("can't remove batch: %v", err)
 			}
 			continue
 		}
-		count += uint(b.len())
-		if readBatch == nil {
-			// readBatch points to the oldest batch...
-			readBatch = b
-			// ... which can't be on disk anymore.
-			if err = os.Remove(q.dir + "/" + f); err != nil {
-				log.Printf("can't remove batch: %v", err)
-			}
-			// We're reading this one. Don't add it to `batches`.
+		if firstQueue == nil {
+			firstQueue = qb
 			continue
 		}
-		batches = append(batches, b.filename)
+		batches = append(batches, storedBatch{
+			filename:  filename,
+			elemCount: len(qb),
+			fileSize:  fileSize,
+		})
 	}
+	return firstQueue, batches
+}
 
-	writeBatch := newBatch(q.prefix)
-	if readBatch == nil {
-		readBatch = writeBatch
+// batchFilename generates a filename to save the batch. It's intended to be
+// used with a unix nano timestamp.
+func (q *Q) batchFilename(id int64) string {
+	return fmt.Sprintf("%s/%s-%020d%s", q.dir, q.prefix, id, fileExtension)
+}
+
+/*
+// limitDiskUsage delete files if too much diskspace is being used.
+func limitDiskUsage(q *Q, batches []storedBatch) []storedBatch {
+	if q.maxDiskUsage == 0 {
+		// No configured limit.
+		return batches
 	}
-	var out chan interface{}
-	var nextUp interface{} // Next element in the queue.
-	for {
-		// As long as we have no next element we keep `out` on nil. No need to
-		// check it in the select loop.
-		if out == nil {
-			if readBatch.len() > 0 {
-				nextUp = readBatch.peek()
-				out = q.dequeue
+	// Delete most recent ones.
+	switch q.evictionPolicy {
+	default:
+		panic("impossible eviction policy")
+	case evictNewest:
+		acceptedBatches := make([]storedBatch, 0, len(batches))
+		bcount := int64(0)
+		for _, b := range batches {
+			if bcount+b.fileSize > q.maxDiskUsage {
+				log.Printf("removing batch due to disk usage: %s (%d elems)", b.filename, b.elemCount)
+				if err := os.Remove(q.dir + "/" + b.filename); err != nil {
+					log.Printf("can't remove batch: %v", err)
+				}
+				continue
 			}
+			acceptedBatches = append(acceptedBatches, b)
+			bcount += b.fileSize
 		}
-		select {
-		case c := <-q.quit:
-			close(q.enqueue)
-			close(q.dequeue)
-			if writeBatch.len() != 0 {
-				if _, err := writeBatch.saveToDisk(q.dir); err != nil {
-					log.Printf("error batch to disk: %v", err)
-				}
+		return acceptedBatches
+	case evictOldest:
+		// First count the total, then remove from the beginning
+		for len(batches) > 0 {
+			bcount := int64(0)
+			for _, b := range batches {
+				bcount += b.fileSize
 			}
-			if readBatch != writeBatch && readBatch.len() != 0 {
-				if _, err := readBatch.saveToDisk(q.dir); err != nil {
-					log.Printf("error batch to disk: %v", err)
-				}
+			if bcount <= q.maxDiskUsage {
+				return batches
 			}
-			close(c)
-			return
-		case r := <-q.countReq:
-			r <- count
-		case in := <-q.enqueue:
-			count++
-			writeBatch.enqueue(in)
-			if writeBatch.len() > BlockCount {
-				if readBatch == writeBatch {
-					// Don't write to disk, read is already reading from this
-					// batch.
-					writeBatch = newBatch(q.prefix)
-					continue
-				}
-				if _, err := writeBatch.saveToDisk(q.dir); err != nil {
-					log.Printf("error writing batch to disk: %v", err)
-					writeBatch = newBatch(q.prefix)
-					continue
-				}
-				batches = append(batches, writeBatch.filename)
-				writeBatch = newBatch(q.prefix)
+			b := batches[0]
+			log.Printf("removing batch due to disk usage: %s (%d elems)", b.filename, b.elemCount)
+			if err := os.Remove(q.dir + "/" + b.filename); err != nil {
+				log.Printf("can't remove batch: %v", err)
 			}
-		case out <- nextUp:
-			// Note: this case is only enabled when the queue is not empty.
-			readBatch.dequeue()
-			count--
-			out = nil
-			if readBatch.len() == 0 {
-			AGAIN:
-				// Finished with this batch. Open the next one, if any.
-				if len(batches) > 0 {
-					var err error
-					filename := batches[0]
-					readBatch, err = openBatch(q.dir + "/" + filename)
-					batches = batches[1:]
-					if err != nil {
-						// Skip this file for this run. Don't delete it.
-						log.Printf("open batch %v error: %v", filename, err)
-						goto AGAIN
-					}
-					if err = os.Remove(q.dir + "/" + filename); err != nil {
-						log.Printf("can't remove batch: %v", err)
-					}
-				} else {
-					// No batches on disk. Read from the one we're writing to.
-					readBatch = writeBatch
-				}
-			}
+			batches = batches[1:]
 		}
+		return batches
 	}
 }
+*/

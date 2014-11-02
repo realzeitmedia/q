@@ -7,10 +7,12 @@ import (
 )
 
 func TestBatchSerialize(t *testing.T) {
-	b := newBatch("")
-	b.enqueue("first")
-	b.enqueue("second")
-	b.enqueue("third")
+	c := make(chan string, 3)
+	c <- "first"
+	c <- "second"
+	c <- "third"
+	close(c)
+	b := newBatch(c)
 
 	// batch to bytes...
 	var buf bytes.Buffer
@@ -24,8 +26,6 @@ func TestBatchSerialize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected deserialize error: %v", err)
 	}
-	again.filename = ""
-	b.filename = ""
 	if !reflect.DeepEqual(again, b) {
 		t.Fatalf("deserialize not the same. Want %#v, got %#v", b, again)
 	}
