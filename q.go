@@ -110,14 +110,15 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 	enqueuerWg := sync.WaitGroup{}
 	loopWg := sync.WaitGroup{}
 
-	// incoming queues
-	metaWriteQueue := make(chan queuechunk, 1)
-	metaReadQueue := make(chan queuechunk)
+	incomingChunks := make(chan queuechunk, 1)
+	outgoingChunks := make(chan queuechunk)
 	readQueue, queues := q.loadExisting(existing)
 
+	// selectQueueRead is either outgoingChunks or nil. It's is used to disable
+	// a select{} case when there is no block for the reader.
 	var selectQueueRead chan queuechunk // nil until the first block is done.
 	if len(readQueue) > 0 {
-		selectQueueRead = metaReadQueue
+		selectQueueRead = outgoingChunks
 	}
 
 	// Quit monitor.
@@ -127,10 +128,12 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 		close(q.enqueue)
 		enqueuerWg.Wait()
 
-		// The main loop should shut down, so we can close the metaReadQueue
+		// The main loop should shut down, so we can close the outgoingChunks
 		loopWg.Wait()
 
 		// Save the non-read messages to disk.
+		// Note: the reader might still be reading from the channel, and hence
+		// some messages might get rearranged.
 		{
 			batch := newBatch(q.dequeue)
 			if batch.len() > 0 {
@@ -149,13 +152,13 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 		defer loopWg.Done()
 		for {
 			select {
-
-			case queue, ok := <-metaWriteQueue:
+			case queue, ok := <-incomingChunks:
 				// The writer deemed the last one full.
 				if !ok {
-					close(metaReadQueue)
+					// incomingChunks is closed. Quit the loop.
+					close(outgoingChunks)
 					if readQueue != nil {
-						// Save the queue which will never be reached anymore
+						// Save the queue which will never be reached anymore.
 						batch := newBatch(readQueue)
 						if _, err := batch.saveToDisk(q.batchFilename(1)); err != nil {
 							log.Printf("error writing batch to disk: %v", err)
@@ -167,7 +170,7 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 				if selectQueueRead == nil {
 					// Keep this queue in memory, it'll be used as the next
 					// queue.
-					selectQueueRead = metaReadQueue
+					selectQueueRead = outgoingChunks
 					readQueue = queue
 					continue
 				}
@@ -187,8 +190,8 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 				})
 
 			case selectQueueRead <- readQueue:
-				// The last complete block is dequeued. See if there is a
-				// something in our block queue.
+				// The last complete block is dequeued. See if there is
+				// something in our chunk queue.
 			AGAIN:
 				if len(queues) > 0 {
 					readBatch := queues[0]
@@ -238,21 +241,21 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 			select {
 			case queue <- msg:
 			default:
-				// Queue full. Send it to the big loop.
+				// This chunk is full.
 				close(queue)
-				metaWriteQueue <- queue
+				incomingChunks <- queue
 				queue = make(chan string, q.blockElemCount)
 				goto AGAIN
 			}
 		}
 		close(queue)
-		metaWriteQueue <- queue
-		close(metaWriteQueue)
+		incomingChunks <- queue
+		close(incomingChunks)
 	}()
 
 	go func() {
 		defer close(q.dequeue)
-		for readQueue := range metaReadQueue {
+		for readQueue := range outgoingChunks {
 			for msg := range readQueue {
 				q.dequeue <- msg
 			}
