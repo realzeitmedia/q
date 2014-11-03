@@ -405,8 +405,6 @@ func TestEmptyRead(t *testing.T) {
 	q.Close()
 }
 
-/*
-
 func TestMaxFiles(t *testing.T) {
 	// Limit the disk size.
 
@@ -421,7 +419,7 @@ func TestMaxFiles(t *testing.T) {
 	}
 	defer q.Close()
 
-	for j := 0; j < eventCount; j++ {
+	for j := 0; j < eventCount+1; j++ {
 		q.Enqueue(fmt.Sprintf("%d: %s", j, payload))
 	}
 	// There should be just three files left.
@@ -429,7 +427,7 @@ func TestMaxFiles(t *testing.T) {
 		t.Fatalf("Wrong number of files: got %d, want %d", got, want)
 	}
 
-	if got, want := q.Count(), uint(4000); got != want {
+	if got, want := q.Count(), 4000; got != want {
 		t.Errorf("Want %d, got %d", want, got)
 	}
 
@@ -440,7 +438,7 @@ func TestMaxFiles(t *testing.T) {
 			t.Fatalf("Want %#v, got %#v", want, got)
 		}
 	}
-	if got, want := q.Count(), uint(0); got != want {
+	if got, want := q.Count(), 0; got != want {
 		t.Errorf("Want %d, got %d", want, got)
 	}
 }
@@ -460,7 +458,7 @@ func TestMaxFilesOldest(t *testing.T) {
 	}
 	defer q.Close()
 
-	for j := 0; j < eventCount; j++ {
+	for j := 0; j < eventCount+1; j++ {
 		q.Enqueue(fmt.Sprintf("%d: %s", j, payload))
 	}
 	// There should be just three files left.
@@ -468,13 +466,13 @@ func TestMaxFilesOldest(t *testing.T) {
 		t.Fatalf("Wrong number of files: got %d, want %d", got, want)
 	}
 
-	if got, want := q.Count(), uint(4000); got != want {
+	if got, want := q.Count(), 4000; got != want {
 		t.Errorf("Want %d, got %d", want, got)
 	}
 
-	// Newest entries are discarded. The first block is not discarded, since
-	// it's being read from.
-	for i := 0; i < 1000; i++ {
+	// Newest entries are discarded. The first two blocks are not discarded,
+	// since they are being read from.
+	for i := 0; i < 2000; i++ {
 		want := fmt.Sprintf("%d: %s", i, payload)
 		if got := <-q.Queue(); want != got {
 			t.Fatalf("Want %#v, got %#v", want, got)
@@ -486,12 +484,11 @@ func TestMaxFilesOldest(t *testing.T) {
 			t.Fatalf("Want %#v, got %#v", want, got)
 		}
 	}
-	if got, want := q.Count(), uint(0); got != want {
+	if got, want := q.Count(), 0; got != want {
 		t.Errorf("Want %d, got %d", want, got)
 	}
 }
 
-*/
 // fileCount is a helper to count files in a directory.
 func fileCount(dir string) int {
 	fh, _ := os.Open(dir)

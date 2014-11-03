@@ -188,6 +188,7 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 					fileSize:  int64(fileSize),
 					filename:  filename,
 				})
+				queues = q.limitDiskUsage(queues)
 
 			case selectQueueRead <- readQueue:
 				// The last complete block is dequeued. See if there is
@@ -373,9 +374,8 @@ func (q *Q) batchFilename(id int64) string {
 	return fmt.Sprintf("%s/%s-%020d%s", q.dir, q.prefix, id, fileExtension)
 }
 
-/*
 // limitDiskUsage delete files if too much diskspace is being used.
-func limitDiskUsage(q *Q, batches []storedBatch) []storedBatch {
+func (q *Q) limitDiskUsage(batches []storedBatch) []storedBatch {
 	if q.maxDiskUsage == 0 {
 		// No configured limit.
 		return batches
@@ -390,7 +390,7 @@ func limitDiskUsage(q *Q, batches []storedBatch) []storedBatch {
 		for _, b := range batches {
 			if bcount+b.fileSize > q.maxDiskUsage {
 				log.Printf("removing batch due to disk usage: %s (%d elems)", b.filename, b.elemCount)
-				if err := os.Remove(q.dir + "/" + b.filename); err != nil {
+				if err := os.Remove(b.filename); err != nil {
 					log.Printf("can't remove batch: %v", err)
 				}
 				continue
@@ -411,7 +411,7 @@ func limitDiskUsage(q *Q, batches []storedBatch) []storedBatch {
 			}
 			b := batches[0]
 			log.Printf("removing batch due to disk usage: %s (%d elems)", b.filename, b.elemCount)
-			if err := os.Remove(q.dir + "/" + b.filename); err != nil {
+			if err := os.Remove(b.filename); err != nil {
 				log.Printf("can't remove batch: %v", err)
 			}
 			batches = batches[1:]
@@ -419,4 +419,3 @@ func limitDiskUsage(q *Q, batches []storedBatch) []storedBatch {
 		return batches
 	}
 }
-*/
