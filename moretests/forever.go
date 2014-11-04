@@ -37,15 +37,23 @@ func main() {
 		}()
 	}
 
-	for {
-		// Empty the queue as quick as possible, then sleep a little.
-		for q.Count() != 0 {
-			if got := <-q.Queue(); got != payload {
-				panic(fmt.Sprintf("Payload error. Got %#v", got))
-			}
+	for got := range q.Queue() {
+		if got != payload {
+			panic(fmt.Sprintf("Payload error. Got %#v", got))
 		}
-		p := time.Duration(rand.Intn(22345)) * time.Millisecond
-		fmt.Printf("Sleep %s\n", p)
-		time.Sleep(p)
 	}
+
+	/*
+		for {
+			// Empty the queue as quick as possible, then sleep a little.
+			for q.Count() != 0 {
+				if got := <-q.Queue(); got != payload {
+					panic(fmt.Sprintf("Payload error. Got %#v", got))
+				}
+			}
+			p := time.Duration(rand.Intn(22345)) * time.Millisecond
+			fmt.Printf("Sleep %s\n", p)
+			time.Sleep(p)
+		}
+	*/
 }
