@@ -11,17 +11,15 @@ the next restart.
 
 If the reader is keeping up the disk won't be touched.
 
-The events which are queued will be serialized using `gob` if they need to be
-swapped to disk.
-
 
 Use case
 --------
 
 We use it in HTTP servers which store log events
 into ElasticSearch (ES). The ES installation is remote, so sometimes it lags a
-little, and sometimes ES is just plain unresponsive. This queue shields the HTTP
-server from ES and from network hick-ups, while not throwing away events or blowing up the webservers.
+little, and sometimes ES is just plain unresponsive or down. This queue shields the HTTP
+server from ES and from network hick-ups, and also keeps the requests as quick
+as possible.
 
 
 File format
@@ -36,13 +34,9 @@ backup (some of the) files if things really go haywire.
 Internals
 ---------
 
-The queue is chopped in chunks called `batch`es. If the reader is keeping up
-both the reader (`Dequeue()`) and the writer (the `Queue` channel) are using
-the same `batch` object, and nothing is stored on disk.
-
-When the reader lags behind more than `BlockCount` entries the writer will get
-its own `batch` object. When that one is full it will be written to disk and
-a new `batch` object will be filled, et cetera.
+The queue is chopped in chunks called `batch`es. Once a batch is full it'll be
+passed on to the reader. If the reader is too slow the batch will be stored to
+disk, otherwise the disk won't be used.
 
 ```
 [   ##][#####][#####][### ]
@@ -57,15 +51,13 @@ a new `batch` object will be filled, et cetera.
     \-- the reader is reading from this (in memory) batch.
 ```
 
-When the reader catches up it will open and process the stored batches one by one, and
-eventually switch over to the same batch as the writer is using.
+When the reader catches up it will open and process the stored batches one by one.
 
 
 TODO
 ----
 
 - Handle errors in a better way than just logging them. Maybe an error channel?
-- Writing and reading is done blocking.
 - All existing batches are fully read on startup.
 
 

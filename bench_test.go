@@ -15,14 +15,14 @@ func BenchmarkSeq(b *testing.B) {
 	)
 
 	d := setupDataDir()
-	q, err := libq.NewQ(d, "events")
+	q, err := libq.NewQ(d, "events", libq.BlockCount(1000))
 	if err != nil {
 		b.Fatal(err)
 	}
 	defer q.Close()
 
 	for i := 0; i < b.N; i++ {
-		for j := 0; j < eventCount; j++ {
+		for j := 0; j < eventCount+1; j++ {
 			q.Enqueue(payload)
 		}
 		for j := 0; j < eventCount; j++ {
@@ -42,7 +42,7 @@ func BenchmarkMulti(b *testing.B) {
 	)
 
 	d := setupDataDir()
-	q, err := libq.NewQ(d, "events")
+	q, err := libq.NewQ(d, "events", libq.BlockCount(1000))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -56,6 +56,7 @@ func BenchmarkMulti(b *testing.B) {
 				}
 			}()
 		}
+		q.Enqueue(payload) // flushes the buffer.
 
 		for i := range make([]struct{}, eventCount) {
 			if got := <-q.Queue(); payload != got {
@@ -73,7 +74,7 @@ func BenchmarkStarved(b *testing.B) {
 	)
 
 	d := setupDataDir()
-	q, err := libq.NewQ(d, "events")
+	q, err := libq.NewQ(d, "events", libq.BlockCount(500))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func BenchmarkStarved(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		go func() {
-			for j := 0; j < eventCount; j++ {
+			for j := 0; j < eventCount+1; j++ {
 				q.Enqueue(payload)
 			}
 		}()
