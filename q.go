@@ -350,13 +350,17 @@ func (q *Q) loadExisting(existing []string) (chan string, []storedBatch) {
 		}
 		if len(qb) == 0 {
 			// Empty batch. Weird.
-			if err = os.Remove(q.dir + "/" + f); err != nil {
+			if err = os.Remove(filename); err != nil {
 				log.Printf("can't remove batch: %v", err)
 			}
 			continue
 		}
 		if firstQueue == nil {
 			firstQueue = qb
+			// It's in memory.
+			if err = os.Remove(filename); err != nil {
+				log.Printf("can't remove batch: %v", err)
+			}
 			continue
 		}
 		batches = append(batches, storedBatch{
