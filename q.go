@@ -22,8 +22,6 @@ const (
 )
 
 var (
-	errMagicNumber = errors.New("file not a Q file")
-	errDataError   = errors.New("invalid file format")
 	// ErrInvalidPrefix is potentially returned by NewQ.
 	ErrInvalidPrefix = errors.New("invalid prefix")
 )
@@ -115,7 +113,7 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 	readQueue, queues := q.loadExisting(existing)
 
 	// selectQueueRead is either outgoingChunks or nil. It's is used to disable
-	// a select{} case when there is no block for the reader.
+	// a select{} case when there is no chunk avialable to read.
 	var selectQueueRead chan queuechunk // nil until the first block is done.
 	if len(readQueue) > 0 {
 		selectQueueRead = outgoingChunks
@@ -192,7 +190,7 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 
 			case selectQueueRead <- readQueue:
 				// The last complete block is dequeued. See if there is
-				// something in our chunk queue.
+				// something stored on disk.
 			AGAIN:
 				if len(queues) > 0 {
 					readBatch := queues[0]
@@ -212,7 +210,7 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 					}
 					break
 				}
-				// Nothing there. Wait for a block.
+				// Nothing there. Wait for a new chunk.
 				readQueue = nil
 				selectQueueRead = nil
 
@@ -273,7 +271,8 @@ func (q *Q) Close() {
 	<-c
 }
 
-// Enqueue adds a message to the queue.
+// Enqueue adds a message to the queue. Can be called from different Go
+// routines.
 func (q *Q) Enqueue(m string) {
 	q.enqueue <- m
 }
@@ -312,6 +311,7 @@ func (q *Q) findExisting() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
 	var existing []string
 	names, err := f.Readdirnames(-1)
 	if err != nil {
@@ -324,7 +324,6 @@ func (q *Q) findExisting() ([]string, error) {
 		existing = append(existing, name)
 	}
 	sort.Strings(existing)
-	f.Close()
 	return existing, nil
 }
 
@@ -372,7 +371,7 @@ func (q *Q) loadExisting(existing []string) (chan string, []storedBatch) {
 	return firstQueue, batches
 }
 
-// batchFilename generates a filename to save the batch. It's intended to be
+// batchFilename generates a filename to save a batch. It's intended to be
 // used with a unix nano timestamp.
 func (q *Q) batchFilename(id int64) string {
 	return fmt.Sprintf("%s/%s-%020d%s", q.dir, q.prefix, id, fileExtension)

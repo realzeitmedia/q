@@ -3,9 +3,15 @@ package q
 import (
 	"bufio"
 	"encoding/gob"
+	"errors"
 	"io"
 	"os"
 	"syscall"
+)
+
+var (
+	errIncompleteWrite = errors.New("Not all bytes written")
+	errMagicNumber     = errors.New("file not a Q file")
 )
 
 // batch is a chunk of elements, which might go to disk.
@@ -40,9 +46,12 @@ func (b *batch) saveToDisk(filename string) (int, error) {
 }
 
 func (b *batch) serialize(w io.Writer) error {
-	_, err := w.Write([]byte(magicNumber))
+	n, err := io.WriteString(w, magicNumber)
 	if err != nil {
 		return err
+	}
+	if n != len(magicNumber) {
+		return errIncompleteWrite
 	}
 	enc := gob.NewEncoder(w)
 	if err = enc.Encode(b.elems); err != nil {
