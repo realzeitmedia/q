@@ -27,21 +27,27 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
-	for i := 0; i < 7; i++ {
-		go func() {
-			for {
-				q.Enqueue(payload)
-				time.Sleep(1 * time.Millisecond)
-			}
-		}()
+	for {
+		q.Enqueue(payload)
+		time.Sleep(5 * time.Microsecond)
 	}
 
-	for got := range q.Queue() {
-		if got != payload {
-			panic(fmt.Sprintf("Payload error. Got %#v", got))
+	/*
+		for i := 0; i < 7; i++ {
+			go func() {
+				for {
+					q.Enqueue(payload)
+					time.Sleep(400 * time.Microsecond)
+				}
+			}()
 		}
-	}
+
+			for got := range q.Queue() {
+				if got != payload {
+					panic(fmt.Sprintf("Payload error. Got %#v", got))
+				}
+			}
+	*/
 
 	/*
 		for {

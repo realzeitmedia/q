@@ -110,14 +110,14 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 
 	incomingChunks := make(chan queuechunk, 1)
 	outgoingChunks := make(chan queuechunk)
-	readQueue, queues := q.loadExisting(existing)
+	queues := q.loadExisting(existing)
 
 	// selectQueueRead is either outgoingChunks or nil. It's is used to disable
 	// a select{} case when there is no chunk avialable to read.
-	var selectQueueRead chan queuechunk // nil until the first block is done.
-	if len(readQueue) > 0 {
-		selectQueueRead = outgoingChunks
-	}
+	selectQueueRead := outgoingChunks
+	// Prepare an empty chunk so the selectQueueRead switch case is triggered.
+	readQueue := make(queuechunk)
+	close(readQueue)
 
 	// Quit monitor.
 	go func() {
@@ -283,8 +283,8 @@ func (q *Q) Queue() <-chan string {
 	return q.dequeue
 }
 
-// Count gives the total number of entries in the queue stored on disk(!), and
-// a few from memory. This method is only for ballpark numbers.
+// Count gives the total number of entries in the queue kept on disk for this
+// session, and a few from memory. This method is only for ballpark numbers.
 func (q *Q) Count() int {
 	r := make(chan int)
 	q.countReq <- r
@@ -327,12 +327,12 @@ func (q *Q) findExisting() ([]string, error) {
 	return existing, nil
 }
 
-// loadExisting reads the state from disk. It'll also return a queue for the
-// first block, or nil.
-func (q *Q) loadExisting(existing []string) (chan string, []storedBatch) {
+// loadExisting makes storedBatch{}es from from stored queues. Used on
+// restoreing an old instance.
+func (q *Q) loadExisting(existing []string) []storedBatch {
 	var batches []storedBatch
-	var firstQueue chan string
-	// Check all files. We also like to know their length.
+	// Put all files in storedBatch objects, with their size. Queue length is
+	// too expensive to figure out.
 	for _, f := range existing {
 		filename := q.dir + "/" + f
 		stat, err := os.Stat(filename)
@@ -340,35 +340,13 @@ func (q *Q) loadExisting(existing []string) (chan string, []storedBatch) {
 			log.Printf("stat batch %v error: %v. Ignoring", f, err)
 			continue
 		}
-		fileSize := stat.Size()
-
-		qb, err := openBatch(filename)
-		if err != nil {
-			log.Printf("open batch %v error: %v. Ignoring", f, err)
-			continue
-		}
-		if len(qb) == 0 {
-			// Empty batch. Weird.
-			if err = os.Remove(filename); err != nil {
-				log.Printf("can't remove batch: %v", err)
-			}
-			continue
-		}
-		if firstQueue == nil {
-			firstQueue = qb
-			// It's in memory.
-			if err = os.Remove(filename); err != nil {
-				log.Printf("can't remove batch: %v", err)
-			}
-			continue
-		}
 		batches = append(batches, storedBatch{
 			filename:  filename,
-			elemCount: len(qb),
-			fileSize:  fileSize,
+			elemCount: 0,
+			fileSize:  stat.Size(),
 		})
 	}
-	return firstQueue, batches
+	return batches
 }
 
 // batchFilename generates a filename to save a batch. It's intended to be

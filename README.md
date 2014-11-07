@@ -58,7 +58,6 @@ TODO
 ----
 
 - Handle errors in a better way than just logging them. Maybe an error channel?
-- All existing batches are fully read on startup.
 
 
 &c.
