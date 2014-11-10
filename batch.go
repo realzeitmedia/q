@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	errIncompleteWrite = errors.New("Not all bytes written")
+	errIncompleteWrite = errors.New("not all bytes written")
 	errMagicNumber     = errors.New("file not a Q file")
 )
 
