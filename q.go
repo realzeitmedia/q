@@ -170,7 +170,7 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 					// queue.
 					selectQueueRead = outgoingChunks
 					readQueue = queue
-					continue
+					break
 				}
 
 				// It's not being read from. Store it.
@@ -179,7 +179,7 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 				fileSize, err := batch.saveToDisk(filename)
 				if err != nil {
 					log.Printf("error writing batch to disk: %v", err)
-					continue
+					break
 				}
 				queues = append(queues, storedBatch{
 					elemCount: batch.len(),
