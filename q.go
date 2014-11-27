@@ -265,9 +265,7 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 			select {
 			case <-timerC:
 				// This case is disabled when no timeout is given.
-				if len(queue) > 0 {
-					sendDownstream()
-				}
+				sendDownstream()
 				continue
 			case msg, ok := <-q.enqueue:
 				if !ok {
