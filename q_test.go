@@ -490,6 +490,28 @@ func TestMaxFilesOldest(t *testing.T) {
 	}
 }
 
+func TestTimeout(t *testing.T) {
+	// Maxage for a queue chunk
+	d := setupDataDir()
+	q, err := libq.NewQ(d, "events",
+		libq.BlockCount(10000), libq.Timeout(10*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+
+	eventCount := 100
+	payload := "readme"
+	for j := 0; j < eventCount+1; j++ {
+		q.Enqueue(payload)
+	}
+	for i := 0; i < eventCount; i++ {
+		if have, want := <-q.Queue(), payload; have != want {
+			t.Fatalf("Have %#v, want %#v", have, want)
+		}
+	}
+}
+
 // fileCount is a helper to count files in a directory.
 func fileCount(dir string) int {
 	fh, _ := os.Open(dir)

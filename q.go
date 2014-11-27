@@ -34,6 +34,7 @@ type Q struct {
 	blockElemCount uint
 	maxDiskUsage   int64          // in bytes
 	evictionPolicy evictionPolicy // for maxDiskUsage
+	chunkTimeout   time.Duration
 	enqueue        queuechunk
 	dequeue        queuechunk
 	countReq       chan chan int
@@ -77,7 +78,14 @@ func EvictOldest() configcb {
 	return func(q *Q) {
 		q.evictionPolicy = evictOldest
 	}
+}
 
+// Timeout is an option for NewQ, which gives every element a max time it'll be
+// queued.
+func Timeout(t time.Duration) configcb {
+	return func(q *Q) {
+		q.chunkTimeout = t
+	}
 }
 
 // NewQ makes or opens a Q, with files in and from <dir>/<prefix>-<timestamp>.q .
@@ -235,16 +243,44 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 	go func() {
 		defer enqueuerWg.Done()
 		queue := make(chan string, q.blockElemCount)
-		for msg := range q.enqueue {
-		AGAIN:
+
+		var timer *time.Timer
+		var timerC <-chan time.Time
+		if q.chunkTimeout != 0 {
+			timer = time.NewTimer(q.chunkTimeout)
+			timerC = timer.C
+		}
+
+		sendDownstream := func() {
+			close(queue)
+			incomingChunks <- queue
+			queue = make(chan string, q.blockElemCount)
+			if timer != nil {
+				timer.Reset(q.chunkTimeout)
+			}
+		}
+
+	OUTER:
+		for {
 			select {
-			case queue <- msg:
-			default:
-				// This chunk is full.
-				close(queue)
-				incomingChunks <- queue
-				queue = make(chan string, q.blockElemCount)
-				goto AGAIN
+			case <-timerC:
+				// This case is disabled when no timeout is given.
+				if len(queue) > 0 {
+					sendDownstream()
+				}
+				continue
+			case msg, ok := <-q.enqueue:
+				if !ok {
+					break OUTER
+				}
+			AGAIN:
+				select {
+				case queue <- msg:
+				default:
+					// This chunk is full.
+					sendDownstream()
+					goto AGAIN
+				}
 			}
 		}
 		close(queue)
