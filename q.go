@@ -71,8 +71,8 @@ func BlockCount(count uint) configcb {
 	}
 }
 
-// EvictOldest is an option for NewQ, which modified the MaxDiskUsage
-// bahaviour. It makes MaxDiskUsage() remove oldest entries, while the default
+// EvictOldest is an option for NewQ, which modifies the MaxDiskUsage
+// behaviour. It makes MaxDiskUsage() remove oldest entries, while the default
 // is the opposite.
 func EvictOldest() configcb {
 	return func(q *Q) {
@@ -215,8 +215,8 @@ func (q *Q) findExisting() ([]string, error) {
 	return existing, nil
 }
 
-// loadExisting makes storedBatch{}es from from stored queues. Used on
-// restoreing an old instance.
+// loadExisting makes storedBatch{}es from stored queues. Used on
+// restoring an old instance.
 func (q *Q) loadExisting(existing []string) []storedBatch {
 	var batches []storedBatch
 	// Put all files in storedBatch objects, with their size. Queue length is
@@ -243,7 +243,7 @@ func (q *Q) batchFilename(id int64) string {
 	return fmt.Sprintf("%s/%s-%020d%s", q.dir, q.prefix, id, fileExtension)
 }
 
-// limitDiskUsage delete files if too much diskspace is being used.
+// limitDiskUsage deletes files if too much diskspace is being used.
 func (q *Q) limitDiskUsage(batches []storedBatch) []storedBatch {
 	if q.maxDiskUsage == 0 {
 		// No configured limit.
@@ -293,7 +293,7 @@ func (q *Q) limitDiskUsage(batches []storedBatch) []storedBatch {
 // reader, maybe storing things on disk in the interim.
 func (q *Q) chunkLoop(wg *sync.WaitGroup, queues []storedBatch, incomingChunks, outgoingChunks chan queuechunk) {
 	// selectQueueRead is either outgoingChunks or nil. It's is used to disable
-	// a select{} case when there is no chunk avialable to read.
+	// a select{} case when there is no chunk available to read.
 	selectQueueRead := outgoingChunks
 	// Prepare an empty chunk so the selectQueueRead switch case is triggered.
 	readQueue := make(queuechunk)
