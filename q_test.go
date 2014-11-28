@@ -531,6 +531,29 @@ func TestTimeoutNothing(t *testing.T) {
 	}
 }
 
+func TestTimeoutEmpty(t *testing.T) {
+	// Deal with empty chunks.
+	timeout := 10 * time.Millisecond
+	d := setupDataDir()
+	q, err := libq.NewQ(d, "events", libq.BlockCount(10000), libq.Timeout(timeout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Close()
+
+	q.Enqueue("readme1")
+
+	time.Sleep(2 * timeout)
+	// First block will have expired by now
+	q.Enqueue("readme2")
+	if have, want := <-q.Queue(), "readme1"; have != want {
+		t.Fatalf("Have %#v, want %#v", have, want)
+	}
+	if have, want := <-q.Queue(), "readme2"; have != want {
+		t.Fatalf("Have %#v, want %#v", have, want)
+	}
+}
+
 // fileCount is a helper to count files in a directory.
 func fileCount(dir string) int {
 	fh, _ := os.Open(dir)

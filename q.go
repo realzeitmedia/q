@@ -319,6 +319,11 @@ func (q *Q) chunkLoop(wg *sync.WaitGroup, queues []storedBatch, incomingChunks, 
 					return
 				}
 
+				// chunk timeouts can generate empty queues.
+				if len(queue) == 0 {
+					break
+				}
+
 				if selectQueueRead == nil {
 					// Keep this queue in memory, it'll be used as the next
 					// queue.
