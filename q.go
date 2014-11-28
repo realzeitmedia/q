@@ -239,61 +239,8 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 		}
 	}()
 
-	enqueuerWg.Add(1)
-	go func() {
-		defer enqueuerWg.Done()
-		queue := make(chan string, q.blockElemCount)
-
-		var timer *time.Timer
-		var timerC <-chan time.Time
-		if q.chunkTimeout != 0 {
-			timer = time.NewTimer(q.chunkTimeout)
-			timerC = timer.C
-		}
-
-		sendDownstream := func() {
-			close(queue)
-			incomingChunks <- queue
-			queue = make(chan string, q.blockElemCount)
-			if timer != nil {
-				timer.Reset(q.chunkTimeout)
-			}
-		}
-
-	OUTER:
-		for {
-			select {
-			case <-timerC:
-				// This case is disabled when no timeout is given.
-				sendDownstream()
-				continue
-			case msg, ok := <-q.enqueue:
-				if !ok {
-					break OUTER
-				}
-			AGAIN:
-				select {
-				case queue <- msg:
-				default:
-					// This chunk is full.
-					sendDownstream()
-					goto AGAIN
-				}
-			}
-		}
-		close(queue)
-		incomingChunks <- queue
-		close(incomingChunks)
-	}()
-
-	go func() {
-		defer close(q.dequeue)
-		for readQueue := range outgoingChunks {
-			for msg := range readQueue {
-				q.dequeue <- msg
-			}
-		}
-	}()
+	q.readLoop(&enqueuerWg, incomingChunks, q.chunkTimeout)
+	q.writeLoop(outgoingChunks)
 
 	return &q, nil
 }
@@ -433,4 +380,68 @@ func (q *Q) limitDiskUsage(batches []storedBatch) []storedBatch {
 		}
 		return batches
 	}
+}
+
+// readLoop reads messages coming in and batches them in a queuechunk. When the
+// chunk is full (or too old) it writes the whole chunk to queuechunk.
+func (q *Q) readLoop(wg *sync.WaitGroup, incomingChunks chan queuechunk, chunkTimeout time.Duration) {
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		queue := make(chan string, q.blockElemCount)
+
+		var timer *time.Timer
+		var timerC <-chan time.Time
+		if chunkTimeout != 0 {
+			timer = time.NewTimer(chunkTimeout)
+			timerC = timer.C
+		}
+
+		sendDownstream := func() {
+			close(queue)
+			incomingChunks <- queue
+			queue = make(chan string, q.blockElemCount)
+			if timer != nil {
+				timer.Reset(chunkTimeout)
+			}
+		}
+
+	OUTER:
+		for {
+			select {
+			case <-timerC:
+				// This case is disabled when no timeout is given.
+				sendDownstream()
+				continue
+			case msg, ok := <-q.enqueue:
+				if !ok {
+					break OUTER
+				}
+			AGAIN:
+				select {
+				case queue <- msg:
+				default:
+					// This chunk is full.
+					sendDownstream()
+					goto AGAIN
+				}
+			}
+		}
+		close(queue)
+		incomingChunks <- queue
+		close(incomingChunks)
+	}()
+}
+
+// writeLoop gets a queuechunk from the outgoingChunks chan and writes the
+// messages to the external queue.
+func (q *Q) writeLoop(outgoingChunks chan queuechunk) {
+	go func() {
+		defer close(q.dequeue)
+		for readQueue := range outgoingChunks {
+			for msg := range readQueue {
+				q.dequeue <- msg
+			}
+		}
+	}()
 }
