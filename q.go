@@ -369,7 +369,7 @@ func (q *Q) chunkLoop(wg *sync.WaitGroup, queues []storedBatch, incomingChunks, 
 					}
 					break
 				}
-				// Nothing there. Wait for a new chunk.
+				// Nothing on disk. Wait for a new chunk.
 				readQueue = nil
 				selectQueueRead = nil
 
@@ -439,6 +439,9 @@ func (q *Q) readLoop(wg *sync.WaitGroup, incomingChunks chan queuechunk, chunkTi
 		close(queue)
 		incomingChunks <- queue
 		close(incomingChunks)
+		if timer != nil {
+			timer.Stop()
+		}
 	}()
 }
 
