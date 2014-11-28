@@ -120,13 +120,6 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 	outgoingChunks := make(chan queuechunk)
 	queues := q.loadExisting(existing)
 
-	// selectQueueRead is either outgoingChunks or nil. It's is used to disable
-	// a select{} case when there is no chunk avialable to read.
-	selectQueueRead := outgoingChunks
-	// Prepare an empty chunk so the selectQueueRead switch case is triggered.
-	readQueue := make(queuechunk)
-	close(readQueue)
-
 	// Quit monitor.
 	go func() {
 		c := <-q.quit
@@ -139,7 +132,7 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 
 		// Save the non-read messages to disk.
 		// Note: the reader might still be reading from the channel, and hence
-		// some messages might get rearranged.
+		// some messages might get rearranged on shutdown.
 		{
 			batch := newBatch(q.dequeue)
 			if batch.len() > 0 {
@@ -149,96 +142,10 @@ func NewQ(dir, prefix string, configs ...configcb) (*Q, error) {
 			}
 		}
 		// The dequeuer must be down by now. It closed the dequeue channel.
-
 		c <- struct{}{}
 	}()
 
-	loopWg.Add(1)
-	go func() {
-		defer loopWg.Done()
-		for {
-			select {
-			case queue, ok := <-incomingChunks:
-				// The writer deemed the last one full.
-				if !ok {
-					// incomingChunks is closed. Quit the loop.
-					close(outgoingChunks)
-					if readQueue != nil {
-						// Save the queue which will never be reached anymore.
-						batch := newBatch(readQueue)
-						if _, err := batch.saveToDisk(q.batchFilename(1)); err != nil {
-							log.Printf("error writing batch to disk: %v", err)
-						}
-					}
-					return
-				}
-
-				if selectQueueRead == nil {
-					// Keep this queue in memory, it'll be used as the next
-					// queue.
-					selectQueueRead = outgoingChunks
-					readQueue = queue
-					break
-				}
-
-				// It's not being read from. Store it.
-				batch := newBatch(queue)
-				filename := q.batchFilename(time.Now().UnixNano())
-				fileSize, err := batch.saveToDisk(filename)
-				if err != nil {
-					log.Printf("error writing batch to disk: %v", err)
-					break
-				}
-				queues = append(queues, storedBatch{
-					elemCount: batch.len(),
-					fileSize:  int64(fileSize),
-					filename:  filename,
-				})
-				queues = q.limitDiskUsage(queues)
-
-			case selectQueueRead <- readQueue:
-				// The last complete block is dequeued. See if there is
-				// something stored on disk.
-			AGAIN:
-				if len(queues) > 0 {
-					readBatch := queues[0]
-					queues = queues[1:]
-
-					var err error
-					readQueue, err = openBatch(readBatch.filename)
-					if err != nil {
-						// Skip this file for this run. Don't delete it.
-						log.Printf("open batch %v error: %v", readBatch.filename, err)
-						goto AGAIN
-					}
-					if err = os.Remove(readBatch.filename); err != nil {
-						log.Printf("can't remove batch: %v, igoring", err)
-						// otherwise we would replay it again next run.
-						goto AGAIN
-					}
-					break
-				}
-				// Nothing there. Wait for a new chunk.
-				readQueue = nil
-				selectQueueRead = nil
-
-			case r := <-q.countReq:
-				count := len(readQueue)
-				for _, b := range queues {
-					count += b.elemCount
-				}
-				r <- count
-
-			case r := <-q.diskusageReq:
-				bcount := int64(0)
-				for _, b := range queues {
-					bcount += b.fileSize
-				}
-				r <- bcount
-			}
-		}
-	}()
-
+	q.chunkLoop(&loopWg, queues, incomingChunks, outgoingChunks)
 	q.readLoop(&enqueuerWg, incomingChunks, q.chunkTimeout)
 	q.writeLoop(outgoingChunks)
 
@@ -380,6 +287,103 @@ func (q *Q) limitDiskUsage(batches []storedBatch) []storedBatch {
 		}
 		return batches
 	}
+}
+
+// chunkLoop gets chunks from the reader, and makes them available to the
+// reader, maybe storing things on disk in the interim.
+func (q *Q) chunkLoop(wg *sync.WaitGroup, queues []storedBatch, incomingChunks, outgoingChunks chan queuechunk) {
+	// selectQueueRead is either outgoingChunks or nil. It's is used to disable
+	// a select{} case when there is no chunk avialable to read.
+	selectQueueRead := outgoingChunks
+	// Prepare an empty chunk so the selectQueueRead switch case is triggered.
+	readQueue := make(queuechunk)
+	close(readQueue)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case queue, ok := <-incomingChunks:
+				// The writer deemed the last one full.
+				if !ok {
+					// incomingChunks is closed. Quit the loop.
+					close(outgoingChunks)
+					if readQueue != nil {
+						// Save the queue which will never be reached anymore.
+						batch := newBatch(readQueue)
+						if _, err := batch.saveToDisk(q.batchFilename(1)); err != nil {
+							log.Printf("error writing batch to disk: %v", err)
+						}
+					}
+					return
+				}
+
+				if selectQueueRead == nil {
+					// Keep this queue in memory, it'll be used as the next
+					// queue.
+					selectQueueRead = outgoingChunks
+					readQueue = queue
+					break
+				}
+
+				// It's not being read from. Store it.
+				batch := newBatch(queue)
+				filename := q.batchFilename(time.Now().UnixNano())
+				fileSize, err := batch.saveToDisk(filename)
+				if err != nil {
+					log.Printf("error writing batch to disk: %v", err)
+					break
+				}
+				queues = append(queues, storedBatch{
+					elemCount: batch.len(),
+					fileSize:  int64(fileSize),
+					filename:  filename,
+				})
+				queues = q.limitDiskUsage(queues)
+
+			case selectQueueRead <- readQueue:
+				// The last complete block is dequeued. See if there is
+				// something stored on disk.
+			AGAIN:
+				if len(queues) > 0 {
+					readBatch := queues[0]
+					queues = queues[1:]
+
+					var err error
+					readQueue, err = openBatch(readBatch.filename)
+					if err != nil {
+						// Skip this file for this run. Don't delete it.
+						log.Printf("open batch %v error: %v", readBatch.filename, err)
+						goto AGAIN
+					}
+					if err = os.Remove(readBatch.filename); err != nil {
+						log.Printf("can't remove batch: %v, igoring", err)
+						// otherwise we would replay it again next run.
+						goto AGAIN
+					}
+					break
+				}
+				// Nothing there. Wait for a new chunk.
+				readQueue = nil
+				selectQueueRead = nil
+
+			case r := <-q.countReq:
+				count := len(readQueue)
+				for _, b := range queues {
+					count += b.elemCount
+				}
+				r <- count
+
+			case r := <-q.diskusageReq:
+				bcount := int64(0)
+				for _, b := range queues {
+					bcount += b.fileSize
+				}
+				r <- bcount
+			}
+		}
+	}()
 }
 
 // readLoop reads messages coming in and batches them in a queuechunk. When the
