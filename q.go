@@ -426,13 +426,12 @@ func (q *Q) readLoop(wg *sync.WaitGroup, incomingChunks chan queuechunk, chunkTi
 				if !ok {
 					break OUTER
 				}
-			AGAIN:
 				select {
 				case queue <- msg:
 				default:
 					// This chunk is full.
 					sendDownstream()
-					goto AGAIN
+					queue <- msg
 				}
 			}
 		}
